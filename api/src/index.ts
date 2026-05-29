@@ -18,6 +18,6 @@ app.use('/api', vapiWebhook);
 app.use('/api', authRoutes);
 
 const PORT = process.env.PORT ?? 3001;
-app.listen(PORT, () => {
-  console.log(`API running on http://localhost:${PORT}`);
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log(`API running on port ${PORT}`);
 });
