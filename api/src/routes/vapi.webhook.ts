@@ -4,6 +4,9 @@ import { getAvailableSlots, createCalendarEvent } from '../services/googleCalend
 
 const router = Router();
 
+// Store slots per call so bookAppointment can validate against them
+const slotCache: Record<string, { date: string; slots: { start: string; label: string }[] }> = {};
+
 router.post('/webhook/vapi', async (req, res) => {
   const event = req.body;
   const type = event?.message?.type;
@@ -12,10 +15,10 @@ router.post('/webhook/vapi', async (req, res) => {
 
   try {
 
-    // ── Tool calls from the AI mid-conversation ──
     if (type === 'tool-calls') {
       const toolCallList = event.message.toolCallList;
       const clinicId = process.env.DEFAULT_CLINIC_ID!;
+      const callId = event.message.call?.id ?? 'unknown';
       const results = [];
 
       for (const toolCall of toolCallList) {
@@ -32,34 +35,25 @@ router.post('/webhook/vapi', async (req, res) => {
         // ── Check availability ──
         if (name === 'checkAvailability') {
           try {
-            console.log('Checking availability for date:', parameters.date);
             const slots = await getAvailableSlots(clinicId, parameters.date);
-            console.log('Slots found:', slots);
 
             if (slots.length === 0) {
-              result = `No available slots on ${parameters.date}. The clinic may be closed or fully booked on that day. Please ask the patient to choose a different date.`;
+              result = `No available slots on ${parameters.date}. The clinic is closed or fully booked. Ask the patient to choose a different date.`;
             } else {
-              // Human readable version for Maya to speak
-              const formatTime = (time: string) => {
-                const [h, m] = time.split(':').map(Number);
-                const period = h >= 12 ? 'PM' : 'AM';
-                const hour = h % 12 === 0 ? 12 : h % 12;
-                const minute = m === 0 ? '00' : m.toString().padStart(2, '0');
-                return `${hour}:${minute} ${period}`;
+              // Cache slots for this call so bookAppointment can validate
+              slotCache[callId] = {
+                date: parameters.date,
+                slots: slots.slice(0, 4).map(s => ({ start: s.start, label: s.label })),
               };
 
-              const speakable = slots
-                .slice(0, 4)
-                .map((s) => formatTime(s.start))
+              // Build a strict mapping table for Maya
+              const slotTable = slots.slice(0, 4)
+                .map(s => `"${s.label}" → use time="${s.start}"`)
                 .join(', ');
 
-              // 24-hour format for Maya to use when calling bookAppointment
-              const bookingFormat = slots
-                .slice(0, 4)
-                .map((s) => s.start)
-                .join(', ');
+              const speakable = slots.slice(0, 4).map(s => s.label).join('... ');
 
-              result = `Available slots on ${parameters.date}: ${speakable}. Read these to the patient one at a time with a pause between each. When the patient chooses a time, you MUST pass it to bookAppointment in 24-hour format. The 24-hour equivalents are: ${bookingFormat}. Only offer these exact times — do not suggest any other times.`;
+              result = `Available slots on ${parameters.date}: ${speakable}. Read these to the patient one at a time. STRICT MAPPING — when patient chooses a slot, you MUST use exactly this time value in bookAppointment: ${slotTable}. Do not use any other time value. Do not convert or modify the time.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
@@ -75,69 +69,78 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const { patientName, patientPhone, reason, date, time } = parameters;
 
-            // Convert time to 24-hour format — handles "14:00" and "2:00 PM"
-            const convertTo24Hour = (timeStr: string): { hour: number; min: number } => {
+            // Normalize time — strip any AM/PM if present, convert to 24h
+            const normalizeTime = (timeStr: string): string => {
               const cleaned = timeStr.trim().toUpperCase();
 
               if (cleaned.includes('AM') || cleaned.includes('PM')) {
                 const parts = cleaned.split(' ');
                 const timePart = parts[0];
                 const period = parts[1];
-                const timeSplit = timePart.split(':');
-                let h = parseInt(timeSplit[0], 10);
-                const m = timeSplit[1] ? parseInt(timeSplit[1], 10) : 0;
+                const [hStr, mStr] = timePart.split(':');
+                let h = parseInt(hStr, 10);
+                const m = mStr ? parseInt(mStr, 10) : 0;
                 if (period === 'AM' && h === 12) h = 0;
                 if (period === 'PM' && h !== 12) h += 12;
-                return { hour: h, min: m };
-              } else {
-                const timeSplit = timeStr.split(':');
-                const h = parseInt(timeSplit[0], 10);
-                const m = timeSplit[1] ? parseInt(timeSplit[1], 10) : 0;
-                return { hour: h, min: m };
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
               }
+
+              // Already 24h format — just normalize padding
+              const [hStr, mStr] = timeStr.split(':');
+              const h = parseInt(hStr, 10);
+              const m = mStr ? parseInt(mStr, 10) : 0;
+              return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
             };
 
-            const { hour, min } = convertTo24Hour(time);
-            const dateParts = date.split('-').map(Number);
-            const year = dateParts[0];
-            const month = dateParts[1];
-            const day = dateParts[2];
+            const normalized = normalizeTime(time);
+            console.log(`Time normalized: "${time}" → "${normalized}"`);
+
+            // Validate against cached slots
+            const cached = slotCache[callId];
+            let finalTime = normalized;
+
+            if (cached && cached.date === date) {
+              const match = cached.slots.find(s => s.start === normalized);
+              if (!match) {
+                console.warn(`Time ${normalized} not in cached slots:`, cached.slots);
+                // Use the closest available slot
+                finalTime = cached.slots[0].start;
+                console.log(`Falling back to first available slot: ${finalTime}`);
+              } else {
+                console.log(`Slot validated ✓ ${normalized}`);
+              }
+            }
+
+            // Parse date parts
+            const [year, month, day] = date.split('-').map(Number);
+            const [hour, min] = finalTime.split(':').map(Number);
 
             const startAt = new Date(year, month - 1, day, hour, min, 0, 0);
             const endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
 
-            console.log('Parsed:', { patientName, patientPhone, date, time, hour, min });
             console.log('startAt:', startAt.toISOString());
             console.log('endAt:', endAt.toISOString());
 
-            // Validate date parsed correctly
             if (isNaN(startAt.getTime())) {
-              throw new Error(`Invalid date/time: date=${date} time=${time} hour=${hour} min=${min}`);
+              throw new Error(`Invalid date: date=${date} time=${finalTime}`);
             }
 
             // Find or create patient
             let patient = await prisma.patient.findUnique({
-              where: {
-                clinicId_phone: { clinicId, phone: patientPhone },
-              },
+              where: { clinicId_phone: { clinicId, phone: patientPhone } },
             });
 
             if (!patient) {
               patient = await prisma.patient.create({
-                data: {
-                  clinicId,
-                  name: patientName,
-                  phone: patientPhone,
-                },
+                data: { clinicId, name: patientName, phone: patientPhone },
               });
               console.log('New patient created ✓', patient.id);
             } else {
-              // Update name in case it was corrected
               await prisma.patient.update({
                 where: { id: patient.id },
                 data: { name: patientName },
               });
-              console.log('Existing patient found ✓', patient.id);
+              console.log('Existing patient updated ✓', patient.id);
             }
 
             // Create Google Calendar event
@@ -151,7 +154,7 @@ router.post('/webhook/vapi', async (req, res) => {
 
             console.log('Google Calendar event created ✓', googleEventId);
 
-            // Save appointment to database
+            // Save to database
             const appointment = await prisma.appointment.create({
               data: {
                 clinicId,
@@ -166,39 +169,40 @@ router.post('/webhook/vapi', async (req, res) => {
 
             console.log('Appointment booked ✓', appointment.id);
 
-            // Format confirmation time for speaking
-            const formatTimeReadable = (d: Date) => {
-              const h = d.getHours();
-              const m = d.getMinutes();
-              const period = h >= 12 ? 'PM' : 'AM';
-              const hour = h % 12 === 0 ? 12 : h % 12;
-              const minute = m === 0 ? '' : ` ${m}`;
-              return `${hour}${minute} ${period}`;
-            };
+            // Clean up slot cache
+            delete slotCache[callId];
 
-            result = `Appointment successfully confirmed. Details: Patient name: ${patientName}, Phone: ${patientPhone}, Reason: ${reason}, Date: ${date}, Time: ${formatTimeReadable(startAt)}. The appointment has been saved to the calendar. Please read these details back to the patient clearly and tell them they will receive a reminder before their appointment.`;
+            // Format time for confirmation
+            const h = startAt.getHours();
+            const m = startAt.getMinutes();
+            const period = h >= 12 ? 'PM' : 'AM';
+            const hour12 = h % 12 === 0 ? 12 : h % 12;
+            const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
+            const readableTime = `${hour12}${minuteStr} ${period}`;
+
+            result = `Appointment confirmed. Patient: ${patientName}, Phone: ${patientPhone}, Date: ${date}, Time: ${readableTime}, Reason: ${reason}. Tell the patient their appointment is confirmed for ${readableTime} on ${date} and they will receive a reminder.`;
 
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===');
-            console.error('Error message:', err?.message);
-            console.error('Error stack:', err?.stack);
-            result = 'There was an issue booking the appointment. Please apologise to the patient and let them know a staff member will call them back shortly to confirm their booking.';
+            console.error('Error:', err?.message);
+            console.error('Stack:', err?.stack);
+            result = 'There was a problem booking the appointment. Please apologise and let the patient know a staff member will call them back to confirm.';
           }
         }
 
-        results.push({
-          toolCallId: toolCall.id,
-          result,
-        });
+        results.push({ toolCallId: toolCall.id, result });
       }
 
       return res.json({ results });
     }
 
-    // ── Save call log when call ends ──
+    // ── Save call log ──
     if (type === 'end-of-call-report') {
       const call = event.message.call;
       const transcript = event.message.transcript ?? [];
+
+      // Clean up slot cache for this call
+      if (call?.id) delete slotCache[call.id];
 
       await prisma.callLog.create({
         data: {

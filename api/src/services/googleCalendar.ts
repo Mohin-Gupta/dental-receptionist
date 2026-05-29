@@ -1,7 +1,6 @@
 import { google } from 'googleapis';
 import { prisma } from '../lib/prisma';
 
-// Build the OAuth client
 function getOAuthClient() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -10,7 +9,6 @@ function getOAuthClient() {
   );
 }
 
-// Step 1: Generate URL the clinic admin visits to authorize
 export function getAuthUrl(clinicId: string): string {
   const oauth2Client = getOAuthClient();
   return oauth2Client.generateAuthUrl({
@@ -21,23 +19,17 @@ export function getAuthUrl(clinicId: string): string {
   });
 }
 
-// Step 2: Exchange the code Google returns for tokens, save to DB
 export async function handleOAuthCallback(code: string, clinicId: string) {
   const oauth2Client = getOAuthClient();
   const { tokens } = await oauth2Client.getToken(code);
-
   await prisma.clinic.update({
     where: { id: clinicId },
-    data: {
-      googleTokens: JSON.stringify(tokens),
-    },
+    data: { googleTokens: JSON.stringify(tokens) },
   });
-
   console.log('Google Calendar connected for clinic:', clinicId);
   return tokens;
 }
 
-// Helper: build an authenticated client for a clinic
 async function getAuthenticatedClient(clinicId: string) {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
@@ -51,7 +43,6 @@ async function getAuthenticatedClient(clinicId: string) {
   const tokens = JSON.parse(clinic.googleTokens as string);
   oauth2Client.setCredentials(tokens);
 
-  // Auto-refresh token if expired
   oauth2Client.on('tokens', async (newTokens) => {
     const merged = { ...tokens, ...newTokens };
     await prisma.clinic.update({
@@ -63,34 +54,35 @@ async function getAuthenticatedClient(clinicId: string) {
   return { oauth2Client, clinic };
 }
 
-// Step 3: Get available slots for a given date
 export async function getAvailableSlots(
   clinicId: string,
-  dateStr: string // YYYY-MM-DD
-): Promise<{ start: string; end: string }[]> {
+  dateStr: string
+): Promise<{ start: string; end: string; label: string }[]> {
   const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
   const businessHours = clinic.businessHours as Record<string, { open: string; close: string } | null>;
-  const date = new Date(dateStr);
-  const dayName = date.toLocaleDateString('en-US', { weekday: 'short' }).toLowerCase(); // mon, tue...
+
+  // Get day name from date string directly to avoid timezone issues
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const dayName = dayNames[date.getDay()];
+
+  console.log(`Day for ${dateStr}: ${dayName}`);
 
   const hours = businessHours[dayName];
   if (!hours) {
-    return []; // clinic closed that day
+    console.log(`Clinic closed on ${dayName}`);
+    return [];
   }
 
-  // Build day boundaries in clinic timezone
   const [openHour, openMin] = hours.open.split(':').map(Number);
   const [closeHour, closeMin] = hours.close.split(':').map(Number);
 
-  const dayStart = new Date(dateStr);
-  dayStart.setHours(openHour, openMin, 0, 0);
+  const dayStart = new Date(year, month - 1, day, openHour, openMin, 0, 0);
+  const dayEnd = new Date(year, month - 1, day, closeHour, closeMin, 0, 0);
 
-  const dayEnd = new Date(dateStr);
-  dayEnd.setHours(closeHour, closeMin, 0, 0);
-
-  // Check Google Calendar for busy times
   const freeBusy = await calendar.freebusy.query({
     requestBody: {
       timeMin: dayStart.toISOString(),
@@ -102,9 +94,10 @@ export async function getAvailableSlots(
   const busySlots =
     freeBusy.data.calendars?.[clinic.googleCalendarId ?? 'primary']?.busy ?? [];
 
-  // Generate 30-minute slots and filter out busy ones
-  const slots: { start: string; end: string }[] = [];
-  const slotDuration = 30 * 60 * 1000; // 30 minutes in ms
+  console.log('Busy slots:', JSON.stringify(busySlots));
+
+  const slots: { start: string; end: string; label: string }[] = [];
+  const slotDuration = 30 * 60 * 1000;
   let current = dayStart.getTime();
 
   while (current + slotDuration <= dayEnd.getTime()) {
@@ -118,26 +111,31 @@ export async function getAvailableSlots(
     });
 
     if (!isBusy) {
-      slots.push({
-        start: slotStart.toTimeString().slice(0, 5), // HH:MM
-        end: slotEnd.toTimeString().slice(0, 5),
-      });
+      const h = slotStart.getHours();
+      const m = slotStart.getMinutes();
+      const time24 = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+      const period = h >= 12 ? 'PM' : 'AM';
+      const hour12 = h % 12 === 0 ? 12 : h % 12;
+      const minuteStr = m === 0 ? '00' : m.toString().padStart(2, '0');
+      const label = `${hour12}:${minuteStr} ${period}`;
+
+      slots.push({ start: time24, end: slotEnd.toTimeString().slice(0, 5), label });
     }
 
     current += slotDuration;
   }
 
+  console.log('Available slots:', slots);
   return slots;
 }
 
-// Step 4: Create a calendar event when appointment is booked
 export async function createCalendarEvent(
   clinicId: string,
   appointment: {
     patientName: string;
     patientPhone: string;
     reason: string;
-    startAt: string; // ISO string
+    startAt: string;
     endAt: string;
   }
 ): Promise<string> {
@@ -160,10 +158,9 @@ export async function createCalendarEvent(
     },
   });
 
-  return event.data.id!; // return googleEventId
+  return event.data.id!;
 }
 
-// Step 5: Delete event when appointment is cancelled
 export async function deleteCalendarEvent(
   clinicId: string,
   googleEventId: string
