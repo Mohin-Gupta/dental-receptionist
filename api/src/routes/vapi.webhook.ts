@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { getAvailableSlots, createCalendarEvent } from '../services/googleCalendar';
+import {
+  getAvailableSlots,
+  createCalendarEvent,
+  toISTString,
+  addMinutesToISTString,
+} from '../services/googleCalendar';
 
 const router = Router();
 
@@ -32,7 +37,7 @@ router.post('/webhook/vapi', async (req, res) => {
 
         let result = '';
 
-        // ── Check availability ──
+        // ── checkAvailability ────────────────────────────────────────────────
         if (name === 'checkAvailability') {
           try {
             const slots = await getAvailableSlots(clinicId, parameters.date);
@@ -40,13 +45,11 @@ router.post('/webhook/vapi', async (req, res) => {
             if (slots.length === 0) {
               result = `No available slots on ${parameters.date}. The clinic is closed or fully booked. Ask the patient to choose a different date.`;
             } else {
-              // Cache slots for this call so bookAppointment can validate
               slotCache[callId] = {
                 date: parameters.date,
                 slots: slots.slice(0, 4).map(s => ({ start: s.start, label: s.label })),
               };
 
-              // Build a strict mapping table for Maya
               const slotTable = slots.slice(0, 4)
                 .map(s => `"${s.label}" → use time="${s.start}"`)
                 .join(', ');
@@ -61,7 +64,7 @@ router.post('/webhook/vapi', async (req, res) => {
           }
         }
 
-        // ── Book appointment ──
+        // ── bookAppointment ──────────────────────────────────────────────────
         if (name === 'bookAppointment') {
           console.log('=== BOOK APPOINTMENT CALLED ===');
           console.log('Parameters:', JSON.stringify(parameters, null, 2));
@@ -69,14 +72,12 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const { patientName, patientPhone, reason, date, time } = parameters;
 
-            // Normalize time — strip any AM/PM if present, convert to 24h
+            // Normalize time to 24h "HH:MM" — handle any format the LLM sends
             const normalizeTime = (timeStr: string): string => {
               const cleaned = timeStr.trim().toUpperCase();
 
               if (cleaned.includes('AM') || cleaned.includes('PM')) {
-                const parts = cleaned.split(' ');
-                const timePart = parts[0];
-                const period = parts[1];
+                const [timePart, period] = cleaned.split(' ');
                 const [hStr, mStr] = timePart.split(':');
                 let h = parseInt(hStr, 10);
                 const m = mStr ? parseInt(mStr, 10) : 0;
@@ -85,7 +86,6 @@ router.post('/webhook/vapi', async (req, res) => {
                 return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
               }
 
-              // Already 24h format — just normalize padding
               const [hStr, mStr] = timeStr.split(':');
               const h = parseInt(hStr, 10);
               const m = mStr ? parseInt(mStr, 10) : 0;
@@ -95,7 +95,7 @@ router.post('/webhook/vapi', async (req, res) => {
             const normalized = normalizeTime(time);
             console.log(`Time normalized: "${time}" → "${normalized}"`);
 
-            // Validate against cached slots
+            // Validate / fallback against cached slots
             const cached = slotCache[callId];
             let finalTime = normalized;
 
@@ -103,25 +103,33 @@ router.post('/webhook/vapi', async (req, res) => {
               const match = cached.slots.find(s => s.start === normalized);
               if (!match) {
                 console.warn(`Time ${normalized} not in cached slots:`, cached.slots);
-                // Use the closest available slot
                 finalTime = cached.slots[0].start;
-                console.log(`Falling back to first available slot: ${finalTime}`);
+                console.log(`Falling back to first cached slot: ${finalTime}`);
               } else {
                 console.log(`Slot validated ✓ ${normalized}`);
               }
             }
 
-            // Parse date parts
+            // ── KEY FIX ──────────────────────────────────────────────────────
+            // Build IST ISO strings directly — never use new Date(y, m, d, h, min)
+            // because that creates a local-timezone Date, and on Railway (UTC) it
+            // will be 5h30m wrong when we call .toISOString().
             const [year, month, day] = date.split('-').map(Number);
             const [hour, min] = finalTime.split(':').map(Number);
 
-            const startAt = new Date(year, month - 1, day, hour, min, 0, 0);
-            const endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
+            const startAtIST = toISTString(year, month, day, hour, min);
+            const endAtIST = addMinutesToISTString(startAtIST, 30);
+            // ─────────────────────────────────────────────────────────────────
 
-            console.log('startAt:', startAt.toISOString());
-            console.log('endAt:', endAt.toISOString());
+            console.log('startAt (IST):', startAtIST);
+            console.log('endAt   (IST):', endAtIST);
 
-            if (isNaN(startAt.getTime())) {
+            // For Prisma we convert to a real JS Date (UTC under the hood is fine
+            // because Prisma/Postgres stores UTC and we always read it back via IST helpers)
+            const startAtDate = new Date(startAtIST);
+            const endAtDate = new Date(endAtIST);
+
+            if (isNaN(startAtDate.getTime())) {
               throw new Error(`Invalid date: date=${date} time=${finalTime}`);
             }
 
@@ -143,41 +151,37 @@ router.post('/webhook/vapi', async (req, res) => {
               console.log('Existing patient updated ✓', patient.id);
             }
 
-            // Create Google Calendar event
+            // Create Google Calendar event with IST strings
             const googleEventId = await createCalendarEvent(clinicId, {
               patientName,
               patientPhone,
               reason,
-              startAt: startAt.toISOString(),
-              endAt: endAt.toISOString(),
+              startAt: startAtIST,  // ← IST offset string, not UTC
+              endAt: endAtIST,
             });
 
             console.log('Google Calendar event created ✓', googleEventId);
 
-            // Save to database
+            // Save to database (Prisma accepts the IST ISO string fine)
             const appointment = await prisma.appointment.create({
               data: {
                 clinicId,
                 patientId: patient.id,
                 reason,
-                startAt,
-                endAt,
+                startAt: startAtDate,
+                endAt: endAtDate,
                 status: 'scheduled',
                 googleEventId,
               },
             });
 
             console.log('Appointment booked ✓', appointment.id);
-
-            // Clean up slot cache
             delete slotCache[callId];
 
-            // Format time for confirmation
-            const h = startAt.getHours();
-            const m = startAt.getMinutes();
-            const period = h >= 12 ? 'PM' : 'AM';
-            const hour12 = h % 12 === 0 ? 12 : h % 12;
-            const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
+            // Human-readable confirmation
+            const period = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+            const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
             result = `Appointment confirmed. Patient: ${patientName}, Phone: ${patientPhone}, Date: ${date}, Time: ${readableTime}, Reason: ${reason}. Tell the patient their appointment is confirmed for ${readableTime} on ${date} and they will receive a reminder.`;
@@ -196,12 +200,11 @@ router.post('/webhook/vapi', async (req, res) => {
       return res.json({ results });
     }
 
-    // ── Save call log ──
+    // ── Save call log ────────────────────────────────────────────────────────
     if (type === 'end-of-call-report') {
       const call = event.message.call;
       const transcript = event.message.transcript ?? [];
 
-      // Clean up slot cache for this call
       if (call?.id) delete slotCache[call.id];
 
       await prisma.callLog.create({
