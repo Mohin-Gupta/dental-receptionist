@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Clinic {
+  id               String   @id @default(uuid())
+  name             String
+  phone            String   @unique
+  timezone         String   @default("UTC")
+  googleCalendarId String?
+  googleTokens     String? 
+  businessHours    Json
+  aiPersonality    Json
+  planTier         String   @default("starter")
+  createdAt        DateTime @default(now())
+
+  patients     Patient[]
+  appointments Appointment[]
+  callLogs     CallLog[]
+  escalations  Escalation[]
+  callbacks    Callback[]
+}
+
+model Patient {
+  id        String   @id @default(uuid())
+  clinicId  String
+  name      String
+  phone     String
+  email     String?
+  createdAt DateTime @default(now())
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+  callLogs     CallLog[]
+
+  @@unique([clinicId, phone])
+}
+
+model Appointment {
+  id            String   @id @default(uuid())
+  clinicId      String
+  patientId     String
+  reason        String
+  startAt       DateTime
+  endAt         DateTime
+  status        String   @default("scheduled")
+  googleEventId String?
+  confirmed     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient      Patient       @relation(fields: [patientId], references: [id])
+  callLogs     CallLog[]
+  reminderJobs ReminderJob[]
+  callbacks    Callback[]
+
+  @@index([clinicId, startAt])
+}
+
+model CallLog {
+  id              String   @id @default(uuid())
+  clinicId        String
+  patientId       String?
+  appointmentId   String?
+  vapiCallId      String   @unique
+  direction       String   @default("inbound")
+  durationSecs    Int?
+  confidenceScore Float?
+  transcript      Json?
+  outcome         String?
+  createdAt       DateTime @default(now())
+
+  clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient?     @relation(fields: [patientId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+  escalation  Escalation?
+}
+
+model Escalation {
+  id            String    @id @default(uuid())
+  clinicId      String
+  callLogId     String    @unique
+  reason        String
+  status        String    @default("open")
+  adminNotified String?
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  callLog CallLog @relation(fields: [callLogId], references: [id])
+}
+
+model Callback {
+  id            String    @id @default(uuid())
+  clinicId      String
+  appointmentId String?
+  patientPhone  String
+  reason        String
+  status        String    @default("pending")
+  scheduledAt   DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+}
+
+model ReminderJob {
+  id            String    @id @default(uuid())
+  appointmentId String
+  type          String
+  channel       String    @default("sms")
+  bullJobId     String?   @unique
+  status        String    @default("pending")
+  scheduledAt   DateTime
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+}
