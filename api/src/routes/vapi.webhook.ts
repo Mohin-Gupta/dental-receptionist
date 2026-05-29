@@ -25,7 +25,7 @@ router.post('/webhook/vapi', async (req, res) => {
           ? JSON.parse(rawArgs)
           : rawArgs ?? {};
 
-        console.log(`Tool called: ${name}`, parameters);
+        console.log(`Tool called: ${name}`, JSON.stringify(parameters, null, 2));
 
         let result = '';
 
@@ -37,8 +37,9 @@ router.post('/webhook/vapi', async (req, res) => {
             console.log('Slots found:', slots);
 
             if (slots.length === 0) {
-              result = `No available slots on ${parameters.date}. The clinic may be closed or fully booked. Please ask the patient to choose another date.`;
+              result = `No available slots on ${parameters.date}. The clinic may be closed or fully booked on that day. Please ask the patient to choose a different date.`;
             } else {
+              // Human readable version for Maya to speak
               const formatTime = (time: string) => {
                 const [h, m] = time.split(':').map(Number);
                 const period = h >= 12 ? 'PM' : 'AM';
@@ -47,12 +48,18 @@ router.post('/webhook/vapi', async (req, res) => {
                 return `${hour}:${minute} ${period}`;
               };
 
-              const formatted = slots
-                .slice(0, 6)
+              const speakable = slots
+                .slice(0, 4)
                 .map((s) => formatTime(s.start))
                 .join(', ');
 
-              result = `We have the following slots available on ${parameters.date}: ${formatted}. Which time works best for you?`;
+              // 24-hour format for Maya to use when calling bookAppointment
+              const bookingFormat = slots
+                .slice(0, 4)
+                .map((s) => s.start)
+                .join(', ');
+
+              result = `Available slots on ${parameters.date}: ${speakable}. Read these to the patient one at a time with a pause between each. When the patient chooses a time, you MUST pass it to bookAppointment in 24-hour format. The 24-hour equivalents are: ${bookingFormat}. Only offer these exact times — do not suggest any other times.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
@@ -63,38 +70,50 @@ router.post('/webhook/vapi', async (req, res) => {
         // ── Book appointment ──
         if (name === 'bookAppointment') {
           console.log('=== BOOK APPOINTMENT CALLED ===');
-          console.log('Raw parameters:', JSON.stringify(parameters, null, 2));
+          console.log('Parameters:', JSON.stringify(parameters, null, 2));
 
           try {
             const { patientName, patientPhone, reason, date, time } = parameters;
 
-            // Convert time to 24-hour format (handles both "14:00" and "2:00 PM")
+            // Convert time to 24-hour format — handles "14:00" and "2:00 PM"
             const convertTo24Hour = (timeStr: string): { hour: number; min: number } => {
               const cleaned = timeStr.trim().toUpperCase();
 
               if (cleaned.includes('AM') || cleaned.includes('PM')) {
-                // 12-hour format e.g. "12:00 PM", "9:30 AM"
-                const [timePart, period] = cleaned.split(' ');
-                let [h, m] = timePart.split(':').map(Number);
+                const parts = cleaned.split(' ');
+                const timePart = parts[0];
+                const period = parts[1];
+                const timeSplit = timePart.split(':');
+                let h = parseInt(timeSplit[0], 10);
+                const m = timeSplit[1] ? parseInt(timeSplit[1], 10) : 0;
                 if (period === 'AM' && h === 12) h = 0;
                 if (period === 'PM' && h !== 12) h += 12;
-                return { hour: h, min: m || 0 };
+                return { hour: h, min: m };
               } else {
-                // 24-hour format e.g. "14:00"
-                const [h, m] = timeStr.split(':').map(Number);
-                return { hour: h, min: m || 0 };
+                const timeSplit = timeStr.split(':');
+                const h = parseInt(timeSplit[0], 10);
+                const m = timeSplit[1] ? parseInt(timeSplit[1], 10) : 0;
+                return { hour: h, min: m };
               }
             };
 
             const { hour, min } = convertTo24Hour(time);
-            const [year, month, day] = date.split('-').map(Number);
+            const dateParts = date.split('-').map(Number);
+            const year = dateParts[0];
+            const month = dateParts[1];
+            const day = dateParts[2];
 
             const startAt = new Date(year, month - 1, day, hour, min, 0, 0);
             const endAt = new Date(startAt.getTime() + 30 * 60 * 1000);
 
-            console.log('Parsed time:', { hour, min });
+            console.log('Parsed:', { patientName, patientPhone, date, time, hour, min });
             console.log('startAt:', startAt.toISOString());
             console.log('endAt:', endAt.toISOString());
+
+            // Validate date parsed correctly
+            if (isNaN(startAt.getTime())) {
+              throw new Error(`Invalid date/time: date=${date} time=${time} hour=${hour} min=${min}`);
+            }
 
             // Find or create patient
             let patient = await prisma.patient.findUnique({
@@ -112,6 +131,13 @@ router.post('/webhook/vapi', async (req, res) => {
                 },
               });
               console.log('New patient created ✓', patient.id);
+            } else {
+              // Update name in case it was corrected
+              await prisma.patient.update({
+                where: { id: patient.id },
+                data: { name: patientName },
+              });
+              console.log('Existing patient found ✓', patient.id);
             }
 
             // Create Google Calendar event
@@ -139,13 +165,24 @@ router.post('/webhook/vapi', async (req, res) => {
             });
 
             console.log('Appointment booked ✓', appointment.id);
-            result = `Appointment confirmed for ${patientName} on ${date} at ${time} for ${reason}. It has been added to the calendar. Please confirm these details to the patient clearly.`;
+
+            // Format confirmation time for speaking
+            const formatTimeReadable = (d: Date) => {
+              const h = d.getHours();
+              const m = d.getMinutes();
+              const period = h >= 12 ? 'PM' : 'AM';
+              const hour = h % 12 === 0 ? 12 : h % 12;
+              const minute = m === 0 ? '' : ` ${m}`;
+              return `${hour}${minute} ${period}`;
+            };
+
+            result = `Appointment successfully confirmed. Details: Patient name: ${patientName}, Phone: ${patientPhone}, Reason: ${reason}, Date: ${date}, Time: ${formatTimeReadable(startAt)}. The appointment has been saved to the calendar. Please read these details back to the patient clearly and tell them they will receive a reminder before their appointment.`;
 
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===');
             console.error('Error message:', err?.message);
             console.error('Error stack:', err?.stack);
-            result = 'There was an issue booking the appointment. Please let the patient know a staff member will call them back to confirm.';
+            result = 'There was an issue booking the appointment. Please apologise to the patient and let them know a staff member will call them back shortly to confirm their booking.';
           }
         }
 
