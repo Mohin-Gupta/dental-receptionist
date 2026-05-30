@@ -59,22 +59,22 @@ router.post('/webhook/vapi', async (req, res) => {
             });
 
             if (slots.length === 0) {
-              result = `No available slots on ${parameters.date}. The clinic is closed or fully booked. Ask the patient to choose a different date.`;
+              result = `No slots available on ${parameters.date}. Ask patient to choose another date.`;
             } else {
               slotCache[callId] = {
                 date: parameters.date,
                 slots: slots.map(s => ({ start: s.start, label: s.label })),
               };
 
-              const first4 = slots.slice(0, 4).map(s => s.label).join('... ');
+              const first4 = slots.slice(0, 4).map(s => s.label).join(', ');
               const totalSlots = slots.length;
               const lastSlot = slots[totalSlots - 1].label;
 
-              result = `We have ${totalSlots} slots available on ${parameters.date}. First available: ${first4}. ${totalSlots > 4 ? `More slots available up to ${lastSlot}.` : ''} Read first 4 to patient one at a time. If patient asks for a specific time use validateSlot.`;
+              result = `${totalSlots} slots available on ${parameters.date}. First 4: ${first4}.${totalSlots > 4 ? ` More available up to ${lastSlot}.` : ''} Read first 4 to patient. Use validateSlot if patient asks for specific time.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
-            result = 'Unable to check availability. Please apologise and ask patient to try again.';
+            result = 'Cannot check availability right now. Apologise and ask patient to try again.';
           }
         }
 
@@ -103,24 +103,20 @@ router.post('/webhook/vapi', async (req, res) => {
             const normalized = normalizeTime(time);
             console.log(`Validating slot: ${date} ${normalized}`);
 
-            let isAvailable = false;
-            const cached = slotCache[callId];
-
-            if (cached && cached.date === date) {
-              isAvailable = cached.slots.some(s => s.start === normalized);
-            } else {
-              const slots = await getAvailableSlots(clinicId, date);
-              slots.sort((a, b) => {
+            // Get slots — use cache or fetch
+            let allSlots = slotCache[callId]?.slots ?? [];
+            if (!slotCache[callId] || slotCache[callId].date !== date) {
+              const fetched = await getAvailableSlots(clinicId, date);
+              fetched.sort((a, b) => {
                 const [aH, aM] = a.start.split(':').map(Number);
                 const [bH, bM] = b.start.split(':').map(Number);
                 return (aH * 60 + aM) - (bH * 60 + bM);
               });
-              slotCache[callId] = {
-                date,
-                slots: slots.map(s => ({ start: s.start, label: s.label })),
-              };
-              isAvailable = slots.some(s => s.start === normalized);
+              slotCache[callId] = { date, slots: fetched.map(s => ({ start: s.start, label: s.label })) };
+              allSlots = slotCache[callId].slots;
             }
+
+            const isAvailable = allSlots.some(s => s.start === normalized);
 
             const [h, m] = normalized.split(':').map(Number);
             const period = h >= 12 ? 'PM' : 'AM';
@@ -129,62 +125,74 @@ router.post('/webhook/vapi', async (req, res) => {
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
             if (isAvailable) {
-              result = `${readableTime} on ${date} is available. Confirm this time with the patient, then collect their name and phone number. Use time="${normalized}" when calling bookAppointment or confirmDetails.`;
+              result = `${readableTime} is available. Confirm with patient and proceed to collect name and phone. Use time="${normalized}" for booking.`;
               console.log(`Slot ${normalized} available ✓`);
             } else {
-              const suggestions = slotCache[callId]?.slots.slice(0, 3).map(s => s.label).join(', ') ?? '';
-              result = `${readableTime} on ${date} is not available. ${suggestions ? `Nearest available: ${suggestions}.` : ''} Ask patient if any of these work.`;
-              console.log(`Slot ${normalized} NOT available`);
+              // Find nearest slots around the requested time
+              const requestedMinutes = h * 60 + m;
+              const nearby = allSlots
+                .map(s => {
+                  const [sh, sm] = s.start.split(':').map(Number);
+                  return { ...s, diff: Math.abs(sh * 60 + sm - requestedMinutes) };
+                })
+                .filter(s => s.diff > 0 && s.diff <= 90)
+                .sort((a, b) => a.diff - b.diff)
+                .slice(0, 3);
+
+              const suggestions = nearby.length > 0
+                ? nearby.map(s => s.label).join(' or ')
+                : allSlots.slice(0, 2).map(s => s.label).join(' or ');
+
+              result = `${readableTime} is not available. Nearest available: ${suggestions}. Ask patient which works.`;
+              console.log(`Slot ${normalized} NOT available. Nearby: ${suggestions}`);
             }
           } catch (err: any) {
             console.error('validateSlot error:', err?.message ?? err);
-            result = 'Unable to validate that slot. Ask patient to choose from available times.';
+            result = 'Cannot validate that slot. Ask patient to choose from available times.';
           }
         }
 
-        // ── Confirm details — backend reads back exactly ──
+        // ── Confirm details — backend generates confirmation text ──
         if (name === 'confirmDetails') {
           try {
             const { patientName, patientPhone, date, time } = parameters;
-            const reason = (parameters.reason && parameters.reason.trim() !== '')
-              ? parameters.reason.trim()
-              : 'General visit';
+            const reason = (parameters.reason?.trim()) || 'General visit';
 
-            // Store confirmed details
+            // Clean phone — digits only
+            const cleanPhone = patientPhone.replace(/\D/g, '');
+
             confirmedDetails[callId] = {
               patientName,
-              patientPhone,
+              patientPhone: cleanPhone,
               date,
               time,
               reason,
             };
 
-            // Format phone digit by digit
-            const phoneDigits = patientPhone
-              .replace(/\D/g, '')
-              .split('')
-              .join('. ');
-
-            // Format time
+            // Format time readable
             const [h, m] = time.split(':').map(Number);
             const period = h >= 12 ? 'PM' : 'AM';
             const hour12 = h % 12 === 0 ? 12 : h % 12;
             const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
-            // Format date
+            // Format date readable
             const [year, month, day] = date.split('-').map(Number);
             const monthNames = ['January','February','March','April','May','June',
               'July','August','September','October','November','December'];
             const readableDate = `${monthNames[month - 1]} ${day}`;
 
+            // Last 4 digits only — no full number readback
+            const last4 = cleanPhone.slice(-4);
+
             console.log(`Details confirmed for ${callId}:`, confirmedDetails[callId]);
 
-            result = `Read this EXACTLY to the patient, word for word: "Just to confirm. Your name is ${patientName}. Your phone number is ${phoneDigits}. You are booked for ${reason} on ${readableDate} at ${readableTime}. Is all of this correct?"`;
+            // Short natural confirmation — no digit readback
+            result = `Say this EXACTLY to the patient, do not change any words: "Got it. So I have ${patientName}, number ending in ${last4}, for a ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
 
           } catch (err: any) {
             console.error('confirmDetails error:', err?.message ?? err);
-            result = 'Please ask the patient to confirm their name, number, date and time.';
+            result = 'Please confirm the booking details with the patient.';
           }
         }
 
@@ -193,16 +201,16 @@ router.post('/webhook/vapi', async (req, res) => {
           console.log('=== BOOK APPOINTMENT CALLED ===');
 
           try {
-            // Always prefer confirmed details — never trust LLM to pass correct values
+            // Always use confirmed details from cache
             const confirmed = confirmedDetails[callId];
 
             const patientName = confirmed?.patientName ?? parameters.patientName;
-            const patientPhone = (confirmed?.patientPhone ?? parameters.patientPhone).replace(/\D/g, '');
+            const patientPhone = (confirmed?.patientPhone ?? parameters.patientPhone ?? '').replace(/\D/g, '');
             const date = confirmed?.date ?? parameters.date;
             const time = confirmed?.time ?? parameters.time;
             const reason = confirmed?.reason ?? parameters.reason ?? 'General visit';
 
-            console.log('Booking with confirmed details:', { patientName, patientPhone, date, time, reason });
+            console.log('Booking:', { patientName, patientPhone, date, time, reason });
 
             const normalizeTime = (t: string): string => {
               const cleaned = t.trim().toUpperCase();
@@ -222,22 +230,17 @@ router.post('/webhook/vapi', async (req, res) => {
             };
 
             const finalTime = normalizeTime(time);
-            console.log(`Final time: "${time}" → "${finalTime}"`);
-
             const [year, month, day] = date.split('-').map(Number);
             const [hour, min] = finalTime.split(':').map(Number);
 
             const startAtIST = toISTString(year, month, day, hour, min);
             const endAtIST = addMinutesToISTString(startAtIST, 30);
 
-            console.log('startAt (IST):', startAtIST);
-            console.log('endAt   (IST):', endAtIST);
-
             const startAtDate = new Date(startAtIST);
             const endAtDate = new Date(endAtIST);
 
             if (isNaN(startAtDate.getTime())) {
-              throw new Error(`Invalid date: date=${date} time=${finalTime}`);
+              throw new Error(`Invalid date: ${date} ${finalTime}`);
             }
 
             let patient = await prisma.patient.findUnique({
@@ -248,13 +251,11 @@ router.post('/webhook/vapi', async (req, res) => {
               patient = await prisma.patient.create({
                 data: { clinicId, name: patientName, phone: patientPhone },
               });
-              console.log('New patient created ✓', patient.id);
             } else {
               await prisma.patient.update({
                 where: { id: patient.id },
                 data: { name: patientName },
               });
-              console.log('Existing patient updated ✓', patient.id);
             }
 
             const googleEventId = await createCalendarEvent(clinicId, {
@@ -264,8 +265,6 @@ router.post('/webhook/vapi', async (req, res) => {
               startAt: startAtIST,
               endAt: endAtIST,
             });
-
-            console.log('Google Calendar event created ✓', googleEventId);
 
             const appointment = await prisma.appointment.create({
               data: {
@@ -288,13 +287,11 @@ router.post('/webhook/vapi', async (req, res) => {
             const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
-            result = `Appointment successfully confirmed. Tell the patient exactly: "Your appointment is confirmed for ${readableTime} on ${date}. You will receive a reminder before your appointment."`;
+            result = `Booked successfully. Say this to patient: "You are all set, ${patientName.split(' ')[0]}. See you on ${readableTime}. We will send you a reminder. Take care." Then end the call.`;
 
           } catch (err: any) {
-            console.error('=== BOOKING FAILED ===');
-            console.error('Error:', err?.message);
-            console.error('Stack:', err?.stack);
-            result = 'There was a technical issue. Tell the patient: "Your appointment request has been noted and a team member will call you back shortly to confirm."';
+            console.error('=== BOOKING FAILED ===', err?.message);
+            result = 'Booking had a technical issue. Say: "Your request is noted and a team member will call you back to confirm. Sorry for the trouble."';
           }
         }
 
@@ -316,9 +313,6 @@ router.post('/webhook/vapi', async (req, res) => {
         delete confirmedDetails[call.id];
       }
 
-      console.log('Call ID:', call?.id);
-      console.log('Duration:', call?.duration);
-
       try {
         const saved = await prisma.callLog.create({
           data: {
@@ -332,14 +326,8 @@ router.post('/webhook/vapi', async (req, res) => {
         });
         console.log('Call log saved ✓ ID:', saved.id);
       } catch (err: any) {
-        console.error('=== CALL LOG SAVE FAILED ===');
-        console.error('Error:', err?.message);
-        console.error('Code:', err?.code);
+        console.error('=== CALL LOG SAVE FAILED ===', err?.message);
       }
-    }
-
-    if (type === 'status-update') {
-      console.log('Status update:', event.message?.status);
     }
 
     res.json({ received: true });
