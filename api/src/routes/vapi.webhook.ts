@@ -41,7 +41,6 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const slots = await getAvailableSlots(clinicId, parameters.date);
 
-            // Sort by time
             slots.sort((a, b) => {
               const [aH, aM] = a.start.split(':').map(Number);
               const [bH, bM] = b.start.split(':').map(Number);
@@ -56,12 +55,12 @@ router.post('/webhook/vapi', async (req, res) => {
                 slots: slots.map(s => ({ start: s.start, label: s.label })),
               };
 
-              // First 4 labels to speak
               const first4 = slots.slice(0, 4).map(s => s.label).join('... ');
               const totalSlots = slots.length;
               const hasMore = totalSlots > 4;
+              const lastSlot = slots[totalSlots - 1].label;
 
-              result = `We have ${totalSlots} slots available on ${parameters.date}. The first available times are: ${first4}. ${hasMore ? `We also have slots available later in the day up to ${slots[totalSlots - 1].label}.` : ''} Read these first 4 to the patient one at a time. If patient asks for a specific time, use the validateSlot tool to check if it is available — do not guess.`;
+              result = `We have ${totalSlots} slots available on ${parameters.date}. The first available times are: ${first4}. ${hasMore ? `We also have slots available later in the day up to ${lastSlot}.` : ''} Read these first 4 to the patient one at a time. If the patient asks for a specific time, use the validateSlot tool to check — do not guess.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
@@ -74,7 +73,6 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const { date, time } = parameters;
 
-            // Normalize time to HH:MM
             const normalizeTime = (t: string): string => {
               const cleaned = t.trim().toUpperCase();
               if (cleaned.includes('AM') || cleaned.includes('PM')) {
@@ -95,14 +93,12 @@ router.post('/webhook/vapi', async (req, res) => {
             const normalized = normalizeTime(time);
             console.log(`Validating slot: ${date} ${normalized}`);
 
-            // Check cached slots first
-            const cached = slotCache[callId];
             let isAvailable = false;
+            const cached = slotCache[callId];
 
             if (cached && cached.date === date) {
               isAvailable = cached.slots.some(s => s.start === normalized);
             } else {
-              // Re-fetch if cache miss
               const slots = await getAvailableSlots(clinicId, date);
               slots.sort((a, b) => {
                 const [aH, aM] = a.start.split(':').map(Number);
@@ -113,7 +109,6 @@ router.post('/webhook/vapi', async (req, res) => {
               isAvailable = slots.some(s => s.start === normalized);
             }
 
-            // Build human readable time
             const [h, m] = normalized.split(':').map(Number);
             const period = h >= 12 ? 'PM' : 'AM';
             const hour12 = h % 12 === 0 ? 12 : h % 12;
@@ -121,14 +116,12 @@ router.post('/webhook/vapi', async (req, res) => {
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
             if (isAvailable) {
-              result = `Yes, ${readableTime} on ${date} is available. Confirm this time with the patient and proceed to collect their name and phone number for booking. When calling bookAppointment use time="${normalized}".`;
-              console.log(`Slot ${normalized} is available ✓`);
+              result = `Yes, ${readableTime} on ${date} is available. Confirm this time with the patient then collect their name and phone number. When calling bookAppointment use time="${normalized}".`;
+              console.log(`Slot ${normalized} available ✓`);
             } else {
-              // Find nearest available slots
-              const cached2 = slotCache[callId];
-              const suggestions = cached2?.slots.slice(0, 3).map(s => s.label).join(', ') ?? '';
+              const suggestions = slotCache[callId]?.slots.slice(0, 3).map(s => s.label).join(', ') ?? '';
               result = `Sorry, ${readableTime} on ${date} is not available. ${suggestions ? `The nearest available slots are: ${suggestions}.` : ''} Ask the patient if any of these work.`;
-              console.log(`Slot ${normalized} is NOT available`);
+              console.log(`Slot ${normalized} NOT available`);
             }
           } catch (err: any) {
             console.error('validateSlot error:', err?.message ?? err);
@@ -142,7 +135,14 @@ router.post('/webhook/vapi', async (req, res) => {
           console.log('Parameters:', JSON.stringify(parameters, null, 2));
 
           try {
-            const { patientName, patientPhone, reason, date, time } = parameters;
+            const { patientName, patientPhone, date, time } = parameters;
+
+            // Always provide a fallback for reason
+            const reason = (parameters.reason && parameters.reason.trim() !== '')
+              ? parameters.reason.trim()
+              : 'General visit';
+
+            console.log('Reason:', reason);
 
             const normalizeTime = (t: string): string => {
               const cleaned = t.trim().toUpperCase();
@@ -164,14 +164,13 @@ router.post('/webhook/vapi', async (req, res) => {
             const normalized = normalizeTime(time);
             console.log(`Time normalized: "${time}" → "${normalized}"`);
 
-            // Validate against cache
             const cached = slotCache[callId];
             let finalTime = normalized;
 
             if (cached && cached.date === date) {
               const match = cached.slots.find(s => s.start === normalized);
               if (!match) {
-                console.warn(`Time ${normalized} not in cached slots, using as-is`);
+                console.warn(`Time ${normalized} not in cache, using as-is`);
               } else {
                 console.log(`Slot validated ✓ ${normalized}`);
               }
@@ -240,12 +239,13 @@ router.post('/webhook/vapi', async (req, res) => {
             const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
-            result = `Appointment confirmed. Patient: ${patientName}, Phone: ${patientPhone}, Date: ${date}, Time: ${readableTime}, Reason: ${reason}. Tell the patient their appointment is confirmed for ${readableTime} on ${date} and they will receive a reminder.`;
+            result = `Appointment confirmed successfully. Patient: ${patientName}, Phone: ${patientPhone}, Date: ${date}, Time: ${readableTime}, Reason: ${reason}. Tell the patient clearly: your appointment is confirmed for ${readableTime} on ${date}. They will receive a reminder before their appointment.`;
 
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===');
             console.error('Error:', err?.message);
-            result = 'There was a problem booking the appointment. Please apologise and let the patient know a staff member will call them back to confirm.';
+            console.error('Stack:', err?.stack);
+            result = 'There was a technical issue on my end. However your appointment request has been noted. A team member will call you back shortly to confirm your booking.';
           }
         }
 
@@ -255,7 +255,6 @@ router.post('/webhook/vapi', async (req, res) => {
       return res.json({ results });
     }
 
-    // ── Save call log ──
     console.log('Processing event type:', type);
 
     if (type === 'end-of-call-report') {
