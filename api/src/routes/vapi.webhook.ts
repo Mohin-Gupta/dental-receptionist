@@ -9,7 +9,6 @@ import {
 
 const router = Router();
 
-// Store slots per call so bookAppointment can validate against them
 const slotCache: Record<string, { date: string; slots: { start: string; label: string }[] }> = {};
 
 router.post('/webhook/vapi', async (req, res) => {
@@ -20,7 +19,6 @@ router.post('/webhook/vapi', async (req, res) => {
 
   try {
 
-    // ── Tool calls from the AI mid-conversation ──
     if (type === 'tool-calls') {
       const toolCallList = event.message.toolCallList;
       const clinicId = process.env.DEFAULT_CLINIC_ID!;
@@ -43,29 +41,98 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const slots = await getAvailableSlots(clinicId, parameters.date);
 
+            // Sort by time
+            slots.sort((a, b) => {
+              const [aH, aM] = a.start.split(':').map(Number);
+              const [bH, bM] = b.start.split(':').map(Number);
+              return (aH * 60 + aM) - (bH * 60 + bM);
+            });
+
             if (slots.length === 0) {
               result = `No available slots on ${parameters.date}. The clinic is closed or fully booked. Ask the patient to choose a different date.`;
             } else {
-              // Cache all slots for validation
               slotCache[callId] = {
                 date: parameters.date,
-                slots: slots.slice(0, 8).map(s => ({ start: s.start, label: s.label })),
+                slots: slots.map(s => ({ start: s.start, label: s.label })),
               };
 
-              // Full mapping for Maya to reference
-              const slotTable = slots.slice(0, 8)
-                .map(s => `"${s.label}" → use time="${s.start}"`)
-                .join(', ');
-
-              // First 6 labels for speaking
-              const speakable = slots.slice(0, 6).map(s => s.label).join('... ');
+              // First 4 labels to speak
+              const first4 = slots.slice(0, 4).map(s => s.label).join('... ');
               const totalSlots = slots.length;
+              const hasMore = totalSlots > 4;
 
-              result = `Available slots on ${parameters.date} (${totalSlots} total available): ${speakable}${totalSlots > 6 ? '... and more later in the day' : ''}. Read the first 4 to the patient one at a time. If patient asks for a specific time check this full mapping first: ${slotTable}. STRICT RULE: when booking use ONLY the exact time value from this mapping. Do not convert or modify any time.`;
+              result = `We have ${totalSlots} slots available on ${parameters.date}. The first available times are: ${first4}. ${hasMore ? `We also have slots available later in the day up to ${slots[totalSlots - 1].label}.` : ''} Read these first 4 to the patient one at a time. If patient asks for a specific time, use the validateSlot tool to check if it is available — do not guess.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
-            result = 'Unable to check availability right now. Please ask the patient for a preferred time and try booking directly.';
+            result = 'Unable to check availability right now. Please apologise and ask the patient to try again.';
+          }
+        }
+
+        // ── Validate a specific slot ──
+        if (name === 'validateSlot') {
+          try {
+            const { date, time } = parameters;
+
+            // Normalize time to HH:MM
+            const normalizeTime = (t: string): string => {
+              const cleaned = t.trim().toUpperCase();
+              if (cleaned.includes('AM') || cleaned.includes('PM')) {
+                const [timePart, period] = cleaned.split(' ');
+                const [hStr, mStr] = timePart.split(':');
+                let h = parseInt(hStr, 10);
+                const m = mStr ? parseInt(mStr, 10) : 0;
+                if (period === 'AM' && h === 12) h = 0;
+                if (period === 'PM' && h !== 12) h += 12;
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+              }
+              const [hStr, mStr] = t.split(':');
+              const h = parseInt(hStr, 10);
+              const m = mStr ? parseInt(mStr, 10) : 0;
+              return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+            };
+
+            const normalized = normalizeTime(time);
+            console.log(`Validating slot: ${date} ${normalized}`);
+
+            // Check cached slots first
+            const cached = slotCache[callId];
+            let isAvailable = false;
+
+            if (cached && cached.date === date) {
+              isAvailable = cached.slots.some(s => s.start === normalized);
+            } else {
+              // Re-fetch if cache miss
+              const slots = await getAvailableSlots(clinicId, date);
+              slots.sort((a, b) => {
+                const [aH, aM] = a.start.split(':').map(Number);
+                const [bH, bM] = b.start.split(':').map(Number);
+                return (aH * 60 + aM) - (bH * 60 + bM);
+              });
+              slotCache[callId] = { date, slots: slots.map(s => ({ start: s.start, label: s.label })) };
+              isAvailable = slots.some(s => s.start === normalized);
+            }
+
+            // Build human readable time
+            const [h, m] = normalized.split(':').map(Number);
+            const period = h >= 12 ? 'PM' : 'AM';
+            const hour12 = h % 12 === 0 ? 12 : h % 12;
+            const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
+            const readableTime = `${hour12}${minuteStr} ${period}`;
+
+            if (isAvailable) {
+              result = `Yes, ${readableTime} on ${date} is available. Confirm this time with the patient and proceed to collect their name and phone number for booking. When calling bookAppointment use time="${normalized}".`;
+              console.log(`Slot ${normalized} is available ✓`);
+            } else {
+              // Find nearest available slots
+              const cached2 = slotCache[callId];
+              const suggestions = cached2?.slots.slice(0, 3).map(s => s.label).join(', ') ?? '';
+              result = `Sorry, ${readableTime} on ${date} is not available. ${suggestions ? `The nearest available slots are: ${suggestions}.` : ''} Ask the patient if any of these work.`;
+              console.log(`Slot ${normalized} is NOT available`);
+            }
+          } catch (err: any) {
+            console.error('validateSlot error:', err?.message ?? err);
+            result = 'Unable to validate that slot right now. Please ask the patient to choose from the available times.';
           }
         }
 
@@ -77,13 +144,10 @@ router.post('/webhook/vapi', async (req, res) => {
           try {
             const { patientName, patientPhone, reason, date, time } = parameters;
 
-            // Normalize time — handle any format the LLM sends
-            const normalizeTime = (timeStr: string): string => {
-              const cleaned = timeStr.trim().toUpperCase();
+            const normalizeTime = (t: string): string => {
+              const cleaned = t.trim().toUpperCase();
               if (cleaned.includes('AM') || cleaned.includes('PM')) {
-                const parts = cleaned.split(' ');
-                const timePart = parts[0];
-                const period = parts[1];
+                const [timePart, period] = cleaned.split(' ');
                 const [hStr, mStr] = timePart.split(':');
                 let h = parseInt(hStr, 10);
                 const m = mStr ? parseInt(mStr, 10) : 0;
@@ -91,7 +155,7 @@ router.post('/webhook/vapi', async (req, res) => {
                 if (period === 'PM' && h !== 12) h += 12;
                 return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
               }
-              const [hStr, mStr] = timeStr.split(':');
+              const [hStr, mStr] = t.split(':');
               const h = parseInt(hStr, 10);
               const m = mStr ? parseInt(mStr, 10) : 0;
               return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
@@ -100,22 +164,19 @@ router.post('/webhook/vapi', async (req, res) => {
             const normalized = normalizeTime(time);
             console.log(`Time normalized: "${time}" → "${normalized}"`);
 
-            // Validate against cached slots
+            // Validate against cache
             const cached = slotCache[callId];
             let finalTime = normalized;
 
             if (cached && cached.date === date) {
               const match = cached.slots.find(s => s.start === normalized);
               if (!match) {
-                console.warn(`Time ${normalized} not in cached slots:`, cached.slots);
-                finalTime = cached.slots[0].start;
-                console.log(`Falling back to first cached slot: ${finalTime}`);
+                console.warn(`Time ${normalized} not in cached slots, using as-is`);
               } else {
                 console.log(`Slot validated ✓ ${normalized}`);
               }
             }
 
-            // Build IST ISO strings directly
             const [year, month, day] = date.split('-').map(Number);
             const [hour, min] = finalTime.split(':').map(Number);
 
@@ -132,7 +193,6 @@ router.post('/webhook/vapi', async (req, res) => {
               throw new Error(`Invalid date: date=${date} time=${finalTime}`);
             }
 
-            // Find or create patient
             let patient = await prisma.patient.findUnique({
               where: { clinicId_phone: { clinicId, phone: patientPhone } },
             });
@@ -150,7 +210,6 @@ router.post('/webhook/vapi', async (req, res) => {
               console.log('Existing patient updated ✓', patient.id);
             }
 
-            // Create Google Calendar event
             const googleEventId = await createCalendarEvent(clinicId, {
               patientName,
               patientPhone,
@@ -161,7 +220,6 @@ router.post('/webhook/vapi', async (req, res) => {
 
             console.log('Google Calendar event created ✓', googleEventId);
 
-            // Save to database
             const appointment = await prisma.appointment.create({
               data: {
                 clinicId,
@@ -177,7 +235,6 @@ router.post('/webhook/vapi', async (req, res) => {
             console.log('Appointment booked ✓', appointment.id);
             delete slotCache[callId];
 
-            // Human readable time for confirmation
             const period = hour >= 12 ? 'PM' : 'AM';
             const hour12 = hour % 12 === 0 ? 12 : hour % 12;
             const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
@@ -188,7 +245,6 @@ router.post('/webhook/vapi', async (req, res) => {
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===');
             console.error('Error:', err?.message);
-            console.error('Stack:', err?.stack);
             result = 'There was a problem booking the appointment. Please apologise and let the patient know a staff member will call them back to confirm.';
           }
         }
@@ -199,7 +255,7 @@ router.post('/webhook/vapi', async (req, res) => {
       return res.json({ results });
     }
 
-    // ── Save call log when call ends ──
+    // ── Save call log ──
     console.log('Processing event type:', type);
 
     if (type === 'end-of-call-report') {
