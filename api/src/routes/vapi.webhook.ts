@@ -22,6 +22,8 @@ const confirmedDetails: Record<string, {
   reason: string;
 }> = {};
 
+const nameCache: Record<string, string> = {};
+
 router.post('/webhook/vapi', async (req, res) => {
   const event = req.body;
   const type = event?.message?.type;
@@ -70,15 +72,15 @@ router.post('/webhook/vapi', async (req, res) => {
               const totalSlots = slots.length;
               const lastSlot = slots[totalSlots - 1].label;
 
-              result = `${totalSlots} slots available on ${parameters.date}. First 4: ${first4}.${totalSlots > 4 ? ` More available up to ${lastSlot}.` : ''} Read first 4 to patient. Use validateSlot if patient asks for specific time.`;
+              result = `${totalSlots} slots available on ${parameters.date}. First 4: ${first4}.${totalSlots > 4 ? ` More up to ${lastSlot}.` : ''} Read first 4 naturally. Use validateSlot for specific time requests.`;
             }
           } catch (err: any) {
             console.error('checkAvailability error:', err?.message ?? err);
-            result = 'Cannot check availability right now. Apologise and ask patient to try again.';
+            result = 'Cannot check availability. Apologise and ask patient to try again.';
           }
         }
 
-        // ── Validate a specific slot ──
+        // ── Validate slot ──
         if (name === 'validateSlot') {
           try {
             const { date, time } = parameters;
@@ -101,9 +103,7 @@ router.post('/webhook/vapi', async (req, res) => {
             };
 
             const normalized = normalizeTime(time);
-            console.log(`Validating slot: ${date} ${normalized}`);
 
-            // Get slots — use cache or fetch
             let allSlots = slotCache[callId]?.slots ?? [];
             if (!slotCache[callId] || slotCache[callId].date !== date) {
               const fetched = await getAvailableSlots(clinicId, date);
@@ -117,7 +117,6 @@ router.post('/webhook/vapi', async (req, res) => {
             }
 
             const isAvailable = allSlots.some(s => s.start === normalized);
-
             const [h, m] = normalized.split(':').map(Number);
             const period = h >= 12 ? 'PM' : 'AM';
             const hour12 = h % 12 === 0 ? 12 : h % 12;
@@ -125,10 +124,8 @@ router.post('/webhook/vapi', async (req, res) => {
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
             if (isAvailable) {
-              result = `${readableTime} is available. Confirm with patient and proceed to collect name and phone. Use time="${normalized}" for booking.`;
-              console.log(`Slot ${normalized} available ✓`);
+              result = `${readableTime} is available. Confirm with patient then proceed to name. Use time="${normalized}" for booking.`;
             } else {
-              // Find nearest slots around the requested time
               const requestedMinutes = h * 60 + m;
               const nearby = allSlots
                 .map(s => {
@@ -137,14 +134,13 @@ router.post('/webhook/vapi', async (req, res) => {
                 })
                 .filter(s => s.diff > 0 && s.diff <= 90)
                 .sort((a, b) => a.diff - b.diff)
-                .slice(0, 3);
+                .slice(0, 2);
 
               const suggestions = nearby.length > 0
                 ? nearby.map(s => s.label).join(' or ')
                 : allSlots.slice(0, 2).map(s => s.label).join(' or ');
 
-              result = `${readableTime} is not available. Nearest available: ${suggestions}. Ask patient which works.`;
-              console.log(`Slot ${normalized} NOT available. Nearby: ${suggestions}`);
+              result = `${readableTime} is not available. Nearest options: ${suggestions}. Ask patient which works.`;
             }
           } catch (err: any) {
             console.error('validateSlot error:', err?.message ?? err);
@@ -152,13 +148,46 @@ router.post('/webhook/vapi', async (req, res) => {
           }
         }
 
-        // ── Confirm details — backend generates confirmation text ──
+        // ── Store name exactly as spelled ──
+        if (name === 'storeName') {
+          try {
+            const { letters } = parameters;
+
+            // Parse spelled letters into a proper name
+            // Handles: "M O H I N", "M O H I N space G U P T A", "MOHIN GUPTA"
+            const cleanLetters = letters
+              .trim()
+              .toUpperCase()
+              .replace(/\bSPACE\b/gi, '|')
+              .replace(/[^A-Z|]/g, '')
+              .split('|')
+              .map((word: string) => {
+                if (word.length === 0) return '';
+                return word[0].toUpperCase() + word.slice(1).toLowerCase();
+              })
+              .filter((w: string) => w.length > 0)
+              .join(' ')
+              .trim();
+
+            nameCache[callId] = cleanLetters;
+            console.log(`Name stored: "${letters}" → "${cleanLetters}"`);
+
+            result = `Name stored as "${cleanLetters}". Say to patient: "Got it — ${cleanLetters}. Is that right?" If yes proceed to phone. If no ask to spell again and call storeName again.`;
+
+          } catch (err: any) {
+            console.error('storeName error:', err?.message ?? err);
+            result = 'Could not store name. Ask patient to spell it again.';
+          }
+        }
+
+        // ── Confirm details ──
         if (name === 'confirmDetails') {
           try {
-            const { patientName, patientPhone, date, time } = parameters;
+            const { patientPhone, date, time } = parameters;
             const reason = (parameters.reason?.trim()) || 'General visit';
 
-            // Clean phone — digits only
+            // Always use nameCache for the name
+            const patientName = nameCache[callId] ?? parameters.patientName ?? 'Patient';
             const cleanPhone = patientPhone.replace(/\D/g, '');
 
             confirmedDetails[callId] = {
@@ -169,26 +198,20 @@ router.post('/webhook/vapi', async (req, res) => {
               reason,
             };
 
-            // Format time readable
             const [h, m] = time.split(':').map(Number);
             const period = h >= 12 ? 'PM' : 'AM';
             const hour12 = h % 12 === 0 ? 12 : h % 12;
             const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
 
-            // Format date readable
             const [year, month, day] = date.split('-').map(Number);
             const monthNames = ['January','February','March','April','May','June',
               'July','August','September','October','November','December'];
             const readableDate = `${monthNames[month - 1]} ${day}`;
 
-            // Last 4 digits only — no full number readback
             const last4 = cleanPhone.slice(-4);
 
-            console.log(`Details confirmed for ${callId}:`, confirmedDetails[callId]);
-
-            // Short natural confirmation — no digit readback
-            result = `Say this EXACTLY to the patient, do not change any words: "Got it. So I have ${patientName}, number ending in ${last4}, for a ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
+            result = `Say this EXACTLY: "Perfect — ${patientName}, number ending in ${last4}, ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
 
           } catch (err: any) {
             console.error('confirmDetails error:', err?.message ?? err);
@@ -201,10 +224,10 @@ router.post('/webhook/vapi', async (req, res) => {
           console.log('=== BOOK APPOINTMENT CALLED ===');
 
           try {
-            // Always use confirmed details from cache
             const confirmed = confirmedDetails[callId];
 
-            const patientName = confirmed?.patientName ?? parameters.patientName;
+            // nameCache is the source of truth for name
+            const patientName = nameCache[callId] ?? confirmed?.patientName ?? parameters.patientName;
             const patientPhone = (confirmed?.patientPhone ?? parameters.patientPhone ?? '').replace(/\D/g, '');
             const date = confirmed?.date ?? parameters.date;
             const time = confirmed?.time ?? parameters.time;
@@ -235,7 +258,6 @@ router.post('/webhook/vapi', async (req, res) => {
 
             const startAtIST = toISTString(year, month, day, hour, min);
             const endAtIST = addMinutesToISTString(startAtIST, 30);
-
             const startAtDate = new Date(startAtIST);
             const endAtDate = new Date(endAtIST);
 
@@ -281,17 +303,19 @@ router.post('/webhook/vapi', async (req, res) => {
             console.log('Appointment booked ✓', appointment.id);
             delete slotCache[callId];
             delete confirmedDetails[callId];
+            delete nameCache[callId];
 
             const period = hour >= 12 ? 'PM' : 'AM';
             const hour12 = hour % 12 === 0 ? 12 : hour % 12;
             const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
             const readableTime = `${hour12}${minuteStr} ${period}`;
+            const firstName = patientName.split(' ')[0];
 
-            result = `Booked successfully. Say this to patient: "You are all set, ${patientName.split(' ')[0]}. See you on ${readableTime}. We will send you a reminder. Take care." Then end the call.`;
+            result = `Booked. Say EXACTLY: "You are all set, ${firstName}. See you on ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If patient says no or goodbye, say "Take care, have a great day" and end the call. If patient says yes help them then end the call.`;
 
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===', err?.message);
-            result = 'Booking had a technical issue. Say: "Your request is noted and a team member will call you back to confirm. Sorry for the trouble."';
+            result = 'Booking had an issue. Say: "Your request is noted and a team member will call you back to confirm. Sorry for the trouble. Take care." Then end the call.';
           }
         }
 
@@ -311,6 +335,7 @@ router.post('/webhook/vapi', async (req, res) => {
       if (call?.id) {
         delete slotCache[call.id];
         delete confirmedDetails[call.id];
+        delete nameCache[call.id];
       }
 
       try {
