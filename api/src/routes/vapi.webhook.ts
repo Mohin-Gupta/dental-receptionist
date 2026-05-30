@@ -3,6 +3,8 @@ import { prisma } from '../lib/prisma';
 import {
   getAvailableSlots,
   createCalendarEvent,
+  deleteCalendarEvent,
+  updateCalendarEvent,
   toISTString,
   addMinutesToISTString,
 } from '../services/googleCalendar';
@@ -23,6 +25,56 @@ const confirmedDetails: Record<string, {
 }> = {};
 
 const nameCache: Record<string, string> = {};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeTime(t: string): string {
+  const cleaned = t.trim().toUpperCase();
+  if (cleaned.includes('AM') || cleaned.includes('PM')) {
+    const parts = cleaned.split(' ');
+    const timePart = parts[0];
+    const period = parts[1];
+    const [hStr, mStr] = timePart.split(':');
+    let h = parseInt(hStr, 10);
+    const m = mStr ? parseInt(mStr, 10) : 0;
+    if (period === 'AM' && h === 12) h = 0;
+    if (period === 'PM' && h !== 12) h += 12;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+  }
+  const [hStr, mStr] = t.split(':');
+  const h = parseInt(hStr, 10);
+  const m = mStr ? parseInt(mStr, 10) : 0;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function toReadableTime(h: number, m: number): string {
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
+  return `${hour12}${minuteStr} ${period}`;
+}
+
+function toReadableDate(dateStr: string): string {
+  const monthNames = ['January','February','March','April','May','June',
+    'July','August','September','October','November','December'];
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return `${monthNames[month - 1]} ${day}`;
+}
+
+function utcToISTReadable(utcDate: Date): { readableDate: string; readableTime: string } {
+  const istMs = utcDate.getTime() + 5.5 * 60 * 60 * 1000;
+  const ist = new Date(istMs);
+  const h = ist.getUTCHours();
+  const m = ist.getUTCMinutes();
+  const monthNames = ['January','February','March','April','May','June',
+    'July','August','September','October','November','December'];
+  return {
+    readableDate: `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`,
+    readableTime: toReadableTime(h, m),
+  };
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
 
 router.post('/webhook/vapi', async (req, res) => {
   const event = req.body;
@@ -49,59 +101,56 @@ router.post('/webhook/vapi', async (req, res) => {
 
         let result = '';
 
-        // ── Check availability ──
+        // ── checkAvailability ──────────────────────────────────────────────
         if (name === 'checkAvailability') {
           try {
-            const slots = await getAvailableSlots(clinicId, parameters.date);
+            // Enforce 7-day booking limit
+            const requestedDate = new Date(parameters.date + 'T00:00:00+05:30');
+            const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+            const diffDays = Math.floor(
+              (requestedDate.getTime() - nowIST.getTime()) / (1000 * 60 * 60 * 24)
+            );
 
-            slots.sort((a, b) => {
-              const [aH, aM] = a.start.split(':').map(Number);
-              const [bH, bM] = b.start.split(':').map(Number);
-              return (aH * 60 + aM) - (bH * 60 + bM);
-            });
-
-            if (slots.length === 0) {
-              result = `No slots available on ${parameters.date}. Ask patient to choose another date.`;
+            if (diffDays > 7) {
+              const callBackDate = new Date(requestedDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+              const callBackReadable = callBackDate.toLocaleDateString('en-IN', {
+                weekday: 'long', month: 'long', day: 'numeric'
+              });
+              result = `Date is more than 7 days away. Say: "We only book up to a week in advance. Please call us back around ${callBackReadable} and we will get you sorted."`;
             } else {
-              slotCache[callId] = {
-                date: parameters.date,
-                slots: slots.map(s => ({ start: s.start, label: s.label })),
-              };
+              const slots = await getAvailableSlots(clinicId, parameters.date);
 
-              const first4 = slots.slice(0, 4).map(s => s.label).join(', ');
-              const totalSlots = slots.length;
-              const lastSlot = slots[totalSlots - 1].label;
+              slots.sort((a, b) => {
+                const [aH, aM] = a.start.split(':').map(Number);
+                const [bH, bM] = b.start.split(':').map(Number);
+                return (aH * 60 + aM) - (bH * 60 + bM);
+              });
 
-              result = `${totalSlots} slots available on ${parameters.date}. First 4: ${first4}.${totalSlots > 4 ? ` More up to ${lastSlot}.` : ''} Read first 4 naturally. Use validateSlot for specific time requests.`;
+              if (slots.length === 0) {
+                result = `No slots available on ${parameters.date}. Ask patient to choose another date.`;
+              } else {
+                slotCache[callId] = {
+                  date: parameters.date,
+                  slots: slots.map(s => ({ start: s.start, label: s.label })),
+                };
+
+                const first4 = slots.slice(0, 4).map(s => s.label).join(', ');
+                const lastSlot = slots[slots.length - 1].label;
+                const total = slots.length;
+
+                result = `${total} slots on ${parameters.date}. First 4: ${first4}.${total > 4 ? ` More up to ${lastSlot}.` : ''} Read first 4 naturally. Use validateSlot for specific time requests.`;
+              }
             }
           } catch (err: any) {
-            console.error('checkAvailability error:', err?.message ?? err);
+            console.error('checkAvailability error:', err?.message);
             result = 'Cannot check availability. Apologise and ask patient to try again.';
           }
         }
 
-        // ── Validate slot ──
+        // ── validateSlot ───────────────────────────────────────────────────
         if (name === 'validateSlot') {
           try {
             const { date, time } = parameters;
-
-            const normalizeTime = (t: string): string => {
-              const cleaned = t.trim().toUpperCase();
-              if (cleaned.includes('AM') || cleaned.includes('PM')) {
-                const [timePart, period] = cleaned.split(' ');
-                const [hStr, mStr] = timePart.split(':');
-                let h = parseInt(hStr, 10);
-                const m = mStr ? parseInt(mStr, 10) : 0;
-                if (period === 'AM' && h === 12) h = 0;
-                if (period === 'PM' && h !== 12) h += 12;
-                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-              }
-              const [hStr, mStr] = t.split(':');
-              const h = parseInt(hStr, 10);
-              const m = mStr ? parseInt(mStr, 10) : 0;
-              return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-            };
-
             const normalized = normalizeTime(time);
 
             let allSlots = slotCache[callId]?.slots ?? [];
@@ -118,19 +167,16 @@ router.post('/webhook/vapi', async (req, res) => {
 
             const isAvailable = allSlots.some(s => s.start === normalized);
             const [h, m] = normalized.split(':').map(Number);
-            const period = h >= 12 ? 'PM' : 'AM';
-            const hour12 = h % 12 === 0 ? 12 : h % 12;
-            const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-            const readableTime = `${hour12}${minuteStr} ${period}`;
+            const readableTime = toReadableTime(h, m);
 
             if (isAvailable) {
-              result = `${readableTime} is available. Confirm with patient then proceed to name. Use time="${normalized}" for booking.`;
+              result = `${readableTime} is available. Confirm with patient then proceed. Use time="${normalized}" for booking.`;
             } else {
-              const requestedMinutes = h * 60 + m;
+              const requestedMins = h * 60 + m;
               const nearby = allSlots
                 .map(s => {
                   const [sh, sm] = s.start.split(':').map(Number);
-                  return { ...s, diff: Math.abs(sh * 60 + sm - requestedMinutes) };
+                  return { ...s, diff: Math.abs(sh * 60 + sm - requestedMins) };
                 })
                 .filter(s => s.diff > 0 && s.diff <= 90)
                 .sort((a, b) => a.diff - b.diff)
@@ -140,21 +186,18 @@ router.post('/webhook/vapi', async (req, res) => {
                 ? nearby.map(s => s.label).join(' or ')
                 : allSlots.slice(0, 2).map(s => s.label).join(' or ');
 
-              result = `${readableTime} is not available. Nearest options: ${suggestions}. Ask patient which works.`;
+              result = `${readableTime} is not available. Nearest options: ${suggestions}. Ask which works.`;
             }
           } catch (err: any) {
-            console.error('validateSlot error:', err?.message ?? err);
-            result = 'Cannot validate that slot. Ask patient to choose from available times.';
+            console.error('validateSlot error:', err?.message);
+            result = 'Cannot validate slot. Ask patient to choose from available times.';
           }
         }
 
-        // ── Store name exactly as spelled ──
+        // ── storeName ──────────────────────────────────────────────────────
         if (name === 'storeName') {
           try {
             const { letters } = parameters;
-
-            // Parse spelled letters into a proper name
-            // Handles: "M O H I N", "M O H I N space G U P T A", "MOHIN GUPTA"
             const cleanLetters = letters
               .trim()
               .toUpperCase()
@@ -171,62 +214,197 @@ router.post('/webhook/vapi', async (req, res) => {
 
             nameCache[callId] = cleanLetters;
             console.log(`Name stored: "${letters}" → "${cleanLetters}"`);
-
-            result = `Name stored as "${cleanLetters}". Say to patient: "Got it — ${cleanLetters}. Is that right?" If yes proceed to phone. If no ask to spell again and call storeName again.`;
-
+            result = `Name stored as "${cleanLetters}". Say: "Got it — ${cleanLetters}. Is that right?" If yes proceed. If no ask to spell again and call storeName.`;
           } catch (err: any) {
-            console.error('storeName error:', err?.message ?? err);
-            result = 'Could not store name. Ask patient to spell it again.';
+            console.error('storeName error:', err?.message);
+            result = 'Could not store name. Ask patient to spell again.';
           }
         }
 
-        // ── Confirm details ──
+        // ── confirmDetails ─────────────────────────────────────────────────
         if (name === 'confirmDetails') {
           try {
             const { patientPhone, date, time } = parameters;
-            const reason = (parameters.reason?.trim()) || 'General visit';
-
-            // Always use nameCache for the name
+            const reason = parameters.reason?.trim() || 'General visit';
             const patientName = nameCache[callId] ?? parameters.patientName ?? 'Patient';
             const cleanPhone = patientPhone.replace(/\D/g, '');
-
-            confirmedDetails[callId] = {
-              patientName,
-              patientPhone: cleanPhone,
-              date,
-              time,
-              reason,
-            };
-
-            const [h, m] = time.split(':').map(Number);
-            const period = h >= 12 ? 'PM' : 'AM';
-            const hour12 = h % 12 === 0 ? 12 : h % 12;
-            const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-            const readableTime = `${hour12}${minuteStr} ${period}`;
-
-            const [year, month, day] = date.split('-').map(Number);
-            const monthNames = ['January','February','March','April','May','June',
-              'July','August','September','October','November','December'];
-            const readableDate = `${monthNames[month - 1]} ${day}`;
-
             const last4 = cleanPhone.slice(-4);
 
-            result = `Say this EXACTLY: "Perfect — ${patientName}, number ending in ${last4}, ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
+            if (!/^\d{4}$/.test(last4)) {
+              result = 'Phone number seems incorrect. Ask patient to confirm their number.';
+            } else {
+              confirmedDetails[callId] = { patientName, patientPhone: cleanPhone, date, time, reason };
 
+              const [h, m] = time.split(':').map(Number);
+              const readableTime = toReadableTime(h, m);
+              const readableDate = toReadableDate(date);
+
+              console.log(`Confirmed: ${patientName}, ***${last4}, ${reason}, ${readableDate} ${readableTime}`);
+              result = `Say EXACTLY: "Perfect — ${patientName}, number ending in ${last4}, ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
+            }
           } catch (err: any) {
-            console.error('confirmDetails error:', err?.message ?? err);
-            result = 'Please confirm the booking details with the patient.';
+            console.error('confirmDetails error:', err?.message);
+            result = 'Please confirm booking details with the patient.';
           }
         }
 
-        // ── Book appointment ──
+        // ── findAppointment ────────────────────────────────────────────────
+        if (name === 'findAppointment') {
+          try {
+            const searchName = (parameters.patientName ?? '').trim();
+
+            if (!searchName) {
+              result = 'No name provided. Ask for the patient name.';
+            } else {
+              const patients = await prisma.patient.findMany({
+                where: {
+                  clinicId,
+                  name: { contains: searchName, mode: 'insensitive' },
+                },
+              });
+
+              if (patients.length === 0) {
+                result = `No patient found named "${searchName}". Ask them to confirm the name they booked under or spell it again.`;
+              } else {
+                const appointments = await prisma.appointment.findMany({
+                  where: {
+                    clinicId,
+                    patientId: { in: patients.map(p => p.id) },
+                    status: { in: ['scheduled', 'confirmed'] },
+                    startAt: { gte: new Date() },
+                  },
+                  include: { patient: true },
+                  orderBy: { startAt: 'asc' },
+                  take: 5,
+                });
+
+                if (appointments.length === 0) {
+                  result = `No upcoming appointments found for "${searchName}". They may have no future bookings.`;
+                } else if (appointments.length === 1) {
+                  const a = appointments[0];
+                  const { readableDate, readableTime } = utcToISTReadable(a.startAt);
+                  result = `Found: appointmentId="${a.id}" — ${a.patient.name}, ${a.reason} on ${readableDate} at ${readableTime}. Say: "I found a ${a.reason} on ${readableDate} at ${readableTime} — is that the one?" If yes use appointmentId="${a.id}" for next step.`;
+                } else {
+                  const list = appointments.map(a => {
+                    const { readableDate, readableTime } = utcToISTReadable(a.startAt);
+                    return `appointmentId="${a.id}" — ${a.reason} on ${readableDate} at ${readableTime}`;
+                  }).join('. ');
+                  result = `Found ${appointments.length} appointments: ${list}. Ask patient which one they mean and use the correct appointmentId.`;
+                }
+              }
+            }
+          } catch (err: any) {
+            console.error('findAppointment error:', err?.message);
+            result = 'Could not look up appointments. Ask patient to try again.';
+          }
+        }
+
+        // ── cancelAppointment ──────────────────────────────────────────────
+        if (name === 'cancelAppointment') {
+          try {
+            const { appointmentId } = parameters;
+
+            const appointment = await prisma.appointment.findUnique({
+              where: { id: appointmentId },
+              include: { patient: true },
+            });
+
+            if (!appointment) {
+              result = 'Appointment not found. Ask patient to confirm the details.';
+            } else {
+              // Delete from Google Calendar
+              if (appointment.googleEventId) {
+                try {
+                  await deleteCalendarEvent(clinicId, appointment.googleEventId);
+                } catch (calErr: any) {
+                  console.warn('Calendar delete failed (continuing):', calErr?.message);
+                }
+              }
+
+              // Update DB status
+              await prisma.appointment.update({
+                where: { id: appointmentId },
+                data: { status: 'cancelled' },
+              });
+
+              const { readableDate, readableTime } = utcToISTReadable(appointment.startAt);
+              const firstName = appointment.patient.name.split(' ')[0];
+
+              console.log(`Appointment cancelled ✓ ${appointmentId}`);
+              result = `Cancelled. Say EXACTLY: "Done — your ${appointment.reason} appointment on ${readableDate} at ${readableTime} has been cancelled, ${firstName}. Hope to see you again soon. Take care." Then end the call.`;
+            }
+          } catch (err: any) {
+            console.error('cancelAppointment error:', err?.message);
+            result = 'Could not cancel. Tell patient a team member will call them back to confirm.';
+          }
+        }
+
+        // ── rescheduleAppointment ──────────────────────────────────────────
+        if (name === 'rescheduleAppointment') {
+          try {
+            const { appointmentId, newDate, newTime } = parameters;
+
+            const appointment = await prisma.appointment.findUnique({
+              where: { id: appointmentId },
+              include: { patient: true },
+            });
+
+            if (!appointment) {
+              result = 'Appointment not found. Ask patient to confirm details.';
+            } else {
+              const finalTime = normalizeTime(newTime);
+              const [year, month, day] = newDate.split('-').map(Number);
+              const [hour, min] = finalTime.split(':').map(Number);
+
+              const startAtIST = toISTString(year, month, day, hour, min);
+              const endAtIST = addMinutesToISTString(startAtIST, 30);
+              const startAtDate = new Date(startAtIST);
+              const endAtDate = new Date(endAtIST);
+
+              if (isNaN(startAtDate.getTime())) {
+                throw new Error(`Invalid date: ${newDate} ${finalTime}`);
+              }
+
+              // Update Google Calendar
+              if (appointment.googleEventId) {
+                try {
+                  await updateCalendarEvent(clinicId, appointment.googleEventId, {
+                    startAt: startAtIST,
+                    endAt: endAtIST,
+                  });
+                } catch (calErr: any) {
+                  console.warn('Calendar update failed (continuing):', calErr?.message);
+                }
+              }
+
+              // Update DB
+              await prisma.appointment.update({
+                where: { id: appointmentId },
+                data: {
+                  startAt: startAtDate,
+                  endAt: endAtDate,
+                  status: 'scheduled',
+                },
+              });
+
+              const readableTime = toReadableTime(hour, min);
+              const readableDate = toReadableDate(newDate);
+              const firstName = appointment.patient.name.split(' ')[0];
+
+              console.log(`Appointment rescheduled ✓ ${appointmentId} → ${newDate} ${finalTime}`);
+              result = `Rescheduled. Say EXACTLY: "All done, ${firstName}. Your ${appointment.reason} appointment has been moved to ${readableDate} at ${readableTime}. We will send you a reminder. Take care." Then end the call.`;
+            }
+          } catch (err: any) {
+            console.error('rescheduleAppointment error:', err?.message);
+            result = 'Could not reschedule. Tell patient a team member will call them back to confirm.';
+          }
+        }
+
+        // ── bookAppointment ────────────────────────────────────────────────
         if (name === 'bookAppointment') {
           console.log('=== BOOK APPOINTMENT CALLED ===');
-
           try {
             const confirmed = confirmedDetails[callId];
-
-            // nameCache is the source of truth for name
             const patientName = nameCache[callId] ?? confirmed?.patientName ?? parameters.patientName;
             const patientPhone = (confirmed?.patientPhone ?? parameters.patientPhone ?? '').replace(/\D/g, '');
             const date = confirmed?.date ?? parameters.date;
@@ -234,23 +412,6 @@ router.post('/webhook/vapi', async (req, res) => {
             const reason = confirmed?.reason ?? parameters.reason ?? 'General visit';
 
             console.log('Booking:', { patientName, patientPhone, date, time, reason });
-
-            const normalizeTime = (t: string): string => {
-              const cleaned = t.trim().toUpperCase();
-              if (cleaned.includes('AM') || cleaned.includes('PM')) {
-                const [timePart, period] = cleaned.split(' ');
-                const [hStr, mStr] = timePart.split(':');
-                let h = parseInt(hStr, 10);
-                const m = mStr ? parseInt(mStr, 10) : 0;
-                if (period === 'AM' && h === 12) h = 0;
-                if (period === 'PM' && h !== 12) h += 12;
-                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-              }
-              const [hStr, mStr] = t.split(':');
-              const h = parseInt(hStr, 10);
-              const m = mStr ? parseInt(mStr, 10) : 0;
-              return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-            };
 
             const finalTime = normalizeTime(time);
             const [year, month, day] = date.split('-').map(Number);
@@ -281,11 +442,8 @@ router.post('/webhook/vapi', async (req, res) => {
             }
 
             const googleEventId = await createCalendarEvent(clinicId, {
-              patientName,
-              patientPhone,
-              reason,
-              startAt: startAtIST,
-              endAt: endAtIST,
+              patientName, patientPhone, reason,
+              startAt: startAtIST, endAt: endAtIST,
             });
 
             const appointment = await prisma.appointment.create({
@@ -305,17 +463,14 @@ router.post('/webhook/vapi', async (req, res) => {
             delete confirmedDetails[callId];
             delete nameCache[callId];
 
-            const period = hour >= 12 ? 'PM' : 'AM';
-            const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-            const minuteStr = min === 0 ? '' : `:${min.toString().padStart(2, '0')}`;
-            const readableTime = `${hour12}${minuteStr} ${period}`;
+            const readableTime = toReadableTime(hour, min);
             const firstName = patientName.split(' ')[0];
 
-            result = `Booked. Say EXACTLY: "You are all set, ${firstName}. See you on ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If patient says no or goodbye, say "Take care, have a great day" and end the call. If patient says yes help them then end the call.`;
+            result = `Booked. Say EXACTLY: "You are all set, ${firstName}. See you on ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If no or bye say "Take care, have a great day" and end the call.`;
 
           } catch (err: any) {
             console.error('=== BOOKING FAILED ===', err?.message);
-            result = 'Booking had an issue. Say: "Your request is noted and a team member will call you back to confirm. Sorry for the trouble. Take care." Then end the call.';
+            result = 'Issue booking. Say: "Your request is noted and a team member will call you back. Sorry for the trouble. Take care." Then end the call.';
           }
         }
 
@@ -325,10 +480,7 @@ router.post('/webhook/vapi', async (req, res) => {
       return res.json({ results });
     }
 
-    console.log('Processing event type:', type);
-
     if (type === 'end-of-call-report') {
-      console.log('=== END OF CALL REPORT RECEIVED ===');
       const call = event.message.call;
       const transcript = event.message.transcript ?? [];
 
@@ -349,9 +501,9 @@ router.post('/webhook/vapi', async (req, res) => {
             outcome: 'completed',
           },
         });
-        console.log('Call log saved ✓ ID:', saved.id);
+        console.log('Call log saved ✓', saved.id);
       } catch (err: any) {
-        console.error('=== CALL LOG SAVE FAILED ===', err?.message);
+        console.error('Call log save failed:', err?.message);
       }
     }
 
