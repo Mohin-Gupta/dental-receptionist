@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { createCalendarEvent, toISTString, addMinutesToISTString } from '../services/googleCalendar';
 import { slotCache, confirmedDetails, nameCache, clearCallState } from './state';
 import { normalizeTime, toReadableTime } from './helpers';
+import { scheduleReminders } from '../queues/reminderQueue';
 
 export async function bookAppointment(
   clinicId: string,
@@ -55,6 +56,20 @@ export async function bookAppointment(
       status: 'scheduled', googleEventId,
     },
   });
+
+  try {
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+  await scheduleReminders(
+    appointment.id,
+    patientPhone,
+    patientName,
+    clinic?.name ?? 'Smile Dental Clinic',
+    startAtDate
+  );
+  console.log('Reminders scheduled ✓');
+} catch (err: any) {
+  console.warn('Reminder scheduling failed (non-fatal):', err?.message);
+}
 
   clearCallState(callId);
   console.log('Booked ✓', appointment.id);

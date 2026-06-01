@@ -6,14 +6,14 @@ import authRoutes from './routes/auth';
 
 dotenv.config();
 
+// Start reminder worker
+import './queues/reminderQueue';
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
-
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api', vapiWebhook);
 app.use('/api', authRoutes);
 

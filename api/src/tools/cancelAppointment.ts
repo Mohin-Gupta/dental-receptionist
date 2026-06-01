@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { deleteCalendarEvent } from '../services/googleCalendar';
 import { utcToISTReadable } from './helpers';
+import { cancelReminders } from '../queues/reminderQueue';
 
 export async function cancelAppointment(
   clinicId: string,
@@ -29,6 +30,9 @@ export async function cancelAppointment(
     where: { id: appointmentId },
     data: { status: 'cancelled' },
   });
+
+  await cancelReminders(appointmentId);
+  console.log('Reminders cancelled ✓');
 
   const { readableDate, readableTime } = utcToISTReadable(appointment.startAt);
   const firstName = appointment.patient.name.split(' ')[0];

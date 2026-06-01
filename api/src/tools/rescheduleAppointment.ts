@@ -6,6 +6,7 @@ import {
   addMinutesToISTString,
 } from '../services/googleCalendar';
 import { normalizeTime, toReadableTime, toReadableDate } from './helpers';
+import { cancelReminders, scheduleReminders } from '../queues/reminderQueue';
 
 export async function rescheduleAppointment(
   clinicId: string,
@@ -113,6 +114,8 @@ export async function rescheduleAppointment(
   });
   console.log('Old appointment cancelled ✓');
 
+  await cancelReminders(cleanId);
+
   // Step 3: Create new calendar event
   console.log('Creating new calendar event...');
   let googleEventId = '';
@@ -144,6 +147,16 @@ export async function rescheduleAppointment(
     },
   });
   console.log('New appointment created ✓', newAppointment.id);
+
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+    await scheduleReminders(
+    newAppointment.id,
+    oldAppointment.patient.phone,
+    oldAppointment.patient.name,
+    clinic?.name ?? 'Smile Dental Clinic',
+    startAtDate
+    );
+
   console.log('=== RESCHEDULE COMPLETE ===');
 
   const readableTime = toReadableTime(hour, min);
