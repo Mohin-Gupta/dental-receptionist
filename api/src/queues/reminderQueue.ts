@@ -10,7 +10,7 @@ const connection = new Redis(process.env.REDIS_URL!, {
 
 export const reminderQueue = new Queue('reminders', { connection });
 
-// ── IST hour check ────────────────────────────────────────────────────────────
+// ── IST hour helpers ──────────────────────────────────────────────────────────
 
 function getISTHour(): number {
   const istMs = Date.now() + 5.5 * 60 * 60 * 1000;
@@ -19,10 +19,31 @@ function getISTHour(): number {
 
 function isWithinCallHours(): boolean {
   const hour = getISTHour();
-  return hour >= 8 && hour < 21; // 8 AM to 9 PM IST
+  return hour >= 8 && hour < 21; // 8 AM to 9 PM IST only
 }
 
-// ── Schedule reminders ────────────────────────────────────────────────────────
+// ── Format appointment time ───────────────────────────────────────────────────
+
+function formatAppointmentTime(startAt: Date): {
+  readableTime: string;
+  readableDate: string;
+} {
+  const istMs = startAt.getTime() + 5.5 * 60 * 60 * 1000;
+  const ist = new Date(istMs);
+  const h = ist.getUTCHours();
+  const m = ist.getUTCMinutes();
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
+    'Jul','Aug','Sep','Oct','Nov','Dec'];
+  return {
+    readableTime: `${hour12}${minuteStr} ${period}`,
+    readableDate: `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`,
+  };
+}
+
+// ── Schedule reminders at booking time ───────────────────────────────────────
 
 export async function scheduleReminders(
   appointmentId: string,
@@ -34,8 +55,8 @@ export async function scheduleReminders(
   const now = Date.now();
   const apptMs = startAt.getTime();
 
-  const ms24h = now + 30000; //apptMs - 24 * 60 * 60 * 1000;
-  const ms6h  = now + 60000;  //apptMs - 6  * 60 * 60 * 1000;
+  const ms24h = now + 30000;  //apptMs - 24 * 60 * 60 * 1000
+  const ms6h  = now + 60000;  //apptMs - 6  * 60 * 60 * 1000
 
   if (ms24h > now) {
     const job24 = await reminderQueue.add(
@@ -59,6 +80,8 @@ export async function scheduleReminders(
       },
     });
     console.log(`24h SMS scheduled ✓ fires at ${new Date(ms24h).toISOString()}`);
+  } else {
+    console.log('24h reminder window already passed — skipping');
   }
 
   if (ms6h > now) {
@@ -82,7 +105,9 @@ export async function scheduleReminders(
         status: 'pending',
       },
     });
-    console.log(`6h call/SMS scheduled ✓ fires at ${new Date(ms6h).toISOString()}`);
+    console.log(`6h reminder scheduled ✓ fires at ${new Date(ms6h).toISOString()}`);
+  } else {
+    console.log('6h reminder window already passed — skipping');
   }
 }
 
@@ -91,37 +116,51 @@ export async function scheduleReminders(
 export async function cancelReminders(appointmentId: string): Promise<void> {
   try {
     const job24 = await reminderQueue.getJob(`24h-${appointmentId}`);
-    if (job24) await job24.remove();
+    if (job24) {
+      await job24.remove();
+      console.log(`24h reminder removed ✓`);
+    }
 
     const job6 = await reminderQueue.getJob(`6h-${appointmentId}`);
-    if (job6) await job6.remove();
+    if (job6) {
+      await job6.remove();
+      console.log(`6h reminder removed ✓`);
+    }
 
     await prisma.reminderJob.updateMany({
       where: { appointmentId, status: 'pending' },
       data: { status: 'cancelled' },
     });
-    console.log(`Reminders cancelled ✓ for ${appointmentId}`);
+
+    console.log(`All reminders cancelled ✓ for ${appointmentId}`);
   } catch (err: any) {
     console.warn('Cancel reminders error (non-fatal):', err?.message);
   }
 }
 
-// ── Format appointment time for messages ──────────────────────────────────────
+// ── SMS fallback ──────────────────────────────────────────────────────────────
 
-function formatAppointmentTime(startAt: Date): { readableTime: string; readableDate: string } {
-  const istMs = startAt.getTime() + 5.5 * 60 * 60 * 1000;
-  const ist = new Date(istMs);
-  const h = ist.getUTCHours();
-  const m = ist.getUTCMinutes();
-  const period = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
-    'Jul','Aug','Sep','Oct','Nov','Dec'];
-  return {
-    readableTime: `${hour12}${minuteStr} ${period}`,
-    readableDate: `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`,
-  };
+async function sendFallbackSMS(
+  phone: string,
+  firstName: string,
+  clinicName: string,
+  readableTime: string,
+  appointmentId: string
+): Promise<void> {
+  const message =
+    `Hi ${firstName}, reminder from ${clinicName}: ` +
+    `your appointment is today at ${readableTime}. ` +
+    `To reschedule please call us. ` +
+    `Do not reply to this message.`;
+
+  await sendSMS(phone, message);
+
+  await prisma.reminderJob.updateMany({
+    where: { appointmentId, type: '6h' },
+    data: { status: 'sent', sentAt: new Date() },
+  });
+
+  console.log(`6h fallback SMS sent ✓ to ${phone}`);
 }
 
 // ── Worker ────────────────────────────────────────────────────────────────────
@@ -131,15 +170,20 @@ export const reminderWorker = new Worker(
   async (job: Job) => {
     const { appointmentId, patientPhone, patientName, clinicName, type } = job.data;
 
-    console.log(`Processing ${type} reminder for appointment ${appointmentId}`);
+    console.log(`=== REMINDER JOB START === type: ${type} appointment: ${appointmentId}`);
 
-    // Verify appointment still active
+    // Verify appointment is still active
     const appointment = await prisma.appointment.findUnique({
       where: { id: appointmentId },
     });
 
-    if (!appointment || appointment.status === 'cancelled') {
-      console.log(`Appointment ${appointmentId} cancelled — skipping reminder`);
+    if (!appointment) {
+      console.log(`Appointment ${appointmentId} not found — skipping`);
+      return;
+    }
+
+    if (appointment.status === 'cancelled') {
+      console.log(`Appointment ${appointmentId} is cancelled — skipping`);
       return;
     }
 
@@ -147,12 +191,12 @@ export const reminderWorker = new Worker(
     const firstName = patientName.split(' ')[0];
     const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
 
+    // ── 24h SMS ───────────────────────────────────────────────────────────────
     if (type === '24h') {
-      // ── 24h SMS reminder ──────────────────────────────────────────────────
       const message =
         `Hi ${firstName}, this is a reminder from ${clinicName}. ` +
-        `You have an appointment on ${readableDate} at ${readableTime}. ` +
-        `To reschedule, please call us. See you soon! ` +
+        `You have an appointment tomorrow (${readableDate}) at ${readableTime}. ` +
+        `To reschedule please call us. ` +
         `Do not reply to this message.`;
 
       await sendSMS(phone, message);
@@ -163,37 +207,27 @@ export const reminderWorker = new Worker(
       });
 
       console.log(`24h SMS sent ✓ to ${phone}`);
+    }
 
-    } else if (type === '6h') {
-      // ── 6h reminder — call if within hours, SMS otherwise ─────────────────
+    // ── 6h call or SMS ────────────────────────────────────────────────────────
+    if (type === '6h') {
+      const istHour = getISTHour();
       const canCall = isWithinCallHours();
-      console.log(`IST hour: ${getISTHour()} — canCall: ${canCall}`);
+
+      console.log(`IST hour: ${istHour} — canCall: ${canCall}`);
 
       if (canCall) {
-        // Place outbound Vapi call — reminder only, no confirmation needed
         try {
-          const systemPromptOverride =
-            `You are Maya from ${clinicName} making a brief reminder call. ` +
-            `The patient's name is ${patientName}. ` +
-            `They have an appointment today at ${readableTime}. ` +
-            `\n\nSay EXACTLY this and nothing else: ` +
-            `"Hi, is this ${firstName}? This is Maya calling from ${clinicName}. ` +
-            `I am just calling to remind you about your appointment today at ${readableTime}. ` +
-            `We look forward to seeing you. Have a great day." ` +
-            `\n\nThen end the call immediately. ` +
-            `Do not ask any questions. Do not wait for a response beyond a yes to confirm identity. ` +
-            `Do not offer to reschedule. ` +
-            `Keep the entire call under 20 seconds.`;
+          console.log('Placing outbound reminder call...');
 
           await placeOutboundCall(
             phone,
-            process.env.VAPI_ASSISTANT_ID!,
+            process.env.VAPI_REMINDER_ASSISTANT_ID!,
             {
-              model: {
-                provider: 'openai',
-                model: 'gpt-4o',
-                messages: [{ role: 'system', content: systemPromptOverride }],
-              },
+              patientName: firstName,
+              clinicName,
+              appointmentTime: readableTime,
+              appointmentDate: readableDate,
             }
           );
 
@@ -210,40 +244,18 @@ export const reminderWorker = new Worker(
         }
 
       } else {
-        // Outside call hours — send SMS instead
-        console.log('Outside call hours — sending SMS instead of call');
+        console.log(`Outside call hours (IST ${istHour}:00) — sending SMS instead`);
         await sendFallbackSMS(phone, firstName, clinicName, readableTime, appointmentId);
       }
     }
+
+    console.log(`=== REMINDER JOB DONE === type: ${type}`);
   },
   {
     connection: new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null }),
     concurrency: 5,
   }
 );
-
-async function sendFallbackSMS(
-  phone: string,
-  firstName: string,
-  clinicName: string,
-  readableTime: string,
-  appointmentId: string
-): Promise<void> {
-  const message =
-    `Hi ${firstName}, reminder from ${clinicName}: ` +
-    `your appointment is today at ${readableTime}. ` +
-    `To reschedule, please call us. ` +
-    `Do not reply to this message.`;
-
-  await sendSMS(phone, message);
-
-  await prisma.reminderJob.updateMany({
-    where: { appointmentId, type: '6h' },
-    data: { status: 'sent', sentAt: new Date() },
-  });
-
-  console.log(`6h SMS sent ✓ to ${phone}`);
-}
 
 reminderWorker.on('completed', (job) => {
   console.log(`Reminder job completed ✓ ${job.id}`);

@@ -1,22 +1,33 @@
 export async function placeOutboundCall(
   patientPhone: string,
   assistantId: string,
-  assistantOverrides: Record<string, unknown> = {}
+  variableValues: Record<string, string> = {}
 ): Promise<string> {
+  const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
+
+  const body: Record<string, unknown> = {
+    phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
+    customer: { number: phone },
+    assistantId,
+  };
+
+  if (Object.keys(variableValues).length > 0) {
+    body.assistantOverrides = {
+      variableValues,
+    };
+  }
+
+  console.log('Placing outbound call to:', phone);
+  console.log('Assistant ID:', assistantId);
+  console.log('Variable values:', variableValues);
+
   const response = await fetch('https://api.vapi.ai/call/phone', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${process.env.VAPI_API_KEY}`,
     },
-    body: JSON.stringify({
-      phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
-      customer: {
-        number: patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`,
-      },
-      assistantId,
-      assistantOverrides,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
