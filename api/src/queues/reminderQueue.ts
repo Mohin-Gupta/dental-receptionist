@@ -231,9 +231,9 @@ export const reminderWorker = new Worker(
 
       if (appointments.length === 0) {
         await sendSMS(doctorPhone,
-          `Good morning Doctor. No appointments scheduled for today at ${clinic.name}. ` +
-          `Have a great day! Do not reply to this message.`
-        );
+          `Good morning Doctor. ` 
+        );  //`Good morning Doctor. No appointments scheduled for today at ${clinic.name}. ` +
+          //`Have a great day! Do not reply to this message.`
         console.log('No appointments today — agenda SMS sent to doctor ✓');
         return;
       }
@@ -244,10 +244,10 @@ export const reminderWorker = new Worker(
       }).join('. ');
 
       await sendSMS(doctorPhone,
-        `Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. ` +
+        `Good morning Doctor.`
+      );  /*`Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. ` +
         `Total: ${appointments.length} appointment${appointments.length > 1 ? 's' : ''}. ` +
-        `Do not reply to this message.`
-      );
+        `Do not reply to this message.`*/
 
       console.log(`Daily agenda SMS sent to doctor ✓ — ${appointments.length} appointments`);
       return;
