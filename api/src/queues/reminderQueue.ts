@@ -182,7 +182,7 @@ export async function scheduleDailyAgenda(): Promise<void> {
     'daily-agenda',
     { type: 'agenda', clinicId: process.env.DEFAULT_CLINIC_ID },
     {
-      repeat: { pattern : '* * * * *' }, // 9:00 AM IST = 3:30 AM UTC      repeat: { pattern : '30 3 * * *' },
+      repeat: { pattern : '30 3 * * *' }, // 9:00 AM IST = 3:30 AM UTC      repeat: { pattern : '30 3 * * *' },
       jobId: 'daily-agenda',
     }
   );
