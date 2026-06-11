@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getAuthUrl, handleOAuthCallback } from '../services/googleCalendar';
+import { buildClinicContext } from '../services/clinicInfo';
 
 const router = Router();
 
@@ -12,6 +13,16 @@ router.get('/auth/google', (req, res) => {
   }
   const url = getAuthUrl(clinicId);
   res.redirect(url);
+});
+
+router.get('/clinic/context', async (req, res) => {
+  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+  try {
+    const context = await buildClinicContext(clinicId);
+    res.json({ context });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Google redirects here after admin approves

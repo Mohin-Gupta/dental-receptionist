@@ -1,6 +1,5 @@
 generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -14,11 +13,26 @@ model Clinic {
   phone            String   @unique
   timezone         String   @default("UTC")
   googleCalendarId String?
-  googleTokens     String? 
+  googleTokens     String?
   businessHours    Json
   aiPersonality    Json
   planTier         String   @default("starter")
-  createdAt        DateTime @default(now())
+
+  // Doctor information
+  doctorName        String?
+  doctorPhone       String?
+  doctorQualification String?
+  doctorYOE         Int?
+  doctorSpecialty   String?
+
+  // Clinic information
+  clinicAddress     String?
+  clinicEmail       String?
+  clinicWebsite     String?
+  clinicServices    Json?   // array of services offered
+  clinicAbout       String? // short description
+
+  createdAt DateTime @default(now())
 
   patients     Patient[]
   appointments Appointment[]

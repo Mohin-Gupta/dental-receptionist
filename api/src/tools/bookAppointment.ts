@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma';
 import { createCalendarEvent, toISTString, addMinutesToISTString } from '../services/googleCalendar';
 import { slotCache, confirmedDetails, nameCache, clearCallState } from './state';
 import { normalizeTime, toReadableTime } from './helpers';
-import { scheduleReminders } from '../queues/reminderQueue';
+import { scheduleReminders, reminderQueue } from '../queues/reminderQueue';
 
 export async function bookAppointment(
   clinicId: string,
@@ -57,22 +57,51 @@ export async function bookAppointment(
     },
   });
 
-  try {
-  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
-  await scheduleReminders(
-    appointment.id,
-    patientPhone,
-    patientName,
-    clinic?.name ?? 'Smile Dental Clinic',
-    startAtDate
-  );
-  console.log('Reminders scheduled ✓');
-} catch (err: any) {
-  console.warn('Reminder scheduling failed (non-fatal):', err?.message);
-}
-
   clearCallState(callId);
   console.log('Booked ✓', appointment.id);
+
+  // Schedule 24h and 6h reminders
+  try {
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+    await scheduleReminders(
+      appointment.id,
+      patientPhone,
+      patientName,
+      clinic?.name ?? 'Smile Dental Clinic',
+      startAtDate
+    );
+    console.log('Reminders scheduled ✓');
+  } catch (err: any) {
+    console.warn('Reminder scheduling failed (non-fatal):', err?.message);
+  }
+
+  // Schedule feedback call 24h after appointment
+  try {
+    const feedbackDelay = startAtDate.getTime() + 24 * 60 * 60 * 1000 - Date.now();
+    if (feedbackDelay > 0) {
+      const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+      await reminderQueue.add(
+        'feedback-call',
+        {
+          appointmentId: appointment.id,
+          patientPhone,
+          patientName,
+          clinicName: clinic?.name ?? 'Smile Dental Clinic',
+          reason,
+          type: 'feedback',
+        },
+        {
+          delay: feedbackDelay,
+          attempts: 2,
+          backoff: { type: 'exponential', delay: 60000 },
+          jobId: `feedback-${appointment.id}`,
+        }
+      );
+      console.log('Feedback call scheduled ✓');
+    }
+  } catch (err: any) {
+    console.warn('Feedback scheduling failed (non-fatal):', err?.message);
+  }
 
   const readableTime = toReadableTime(hour, min);
   const firstName = patientName.split(' ')[0];

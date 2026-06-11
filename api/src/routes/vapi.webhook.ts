@@ -10,19 +10,21 @@ import {
   cancelAppointment,
   rescheduleAppointment,
   bookAppointment,
+  confirmDoctorAppointment,
 } from '../tools';
 
 const router = Router();
 
 const TOOL_HANDLERS: Record<string, (clinicId: string, callId: string, params: any) => Promise<string>> = {
-  checkAvailability: (c, id, p) => checkAvailability(c, id, p),
-  validateSlot: (c, id, p) => validateSlot(c, id, p),
-  storeName: (_c, id, p) => Promise.resolve(storeName(id, p)),
-  confirmDetails: (_c, id, p) => Promise.resolve(confirmDetails(id, p)),
-  findAppointment: (c, _id, p) => findAppointment(c, p),
-  cancelAppointment: (c, _id, p) => cancelAppointment(c, p),
-  rescheduleAppointment: (c, _id, p) => rescheduleAppointment(c, p),
-  bookAppointment: (c, id, p) => bookAppointment(c, id, p),
+  checkAvailability:        (c, id, p) => checkAvailability(c, id, p),
+  validateSlot:             (c, id, p) => validateSlot(c, id, p),
+  storeName:                (_c, id, p) => Promise.resolve(storeName(id, p)),
+  confirmDetails:           (_c, id, p) => Promise.resolve(confirmDetails(id, p)),
+  findAppointment:          (c, _id, p) => findAppointment(c, p),
+  cancelAppointment:        (c, _id, p) => cancelAppointment(c, p),
+  rescheduleAppointment:    (c, _id, p) => rescheduleAppointment(c, p),
+  bookAppointment:          (c, id, p)  => bookAppointment(c, id, p),
+  confirmDoctorAppointment: (c, _id, p) => confirmDoctorAppointment(c, p),
 };
 
 router.post('/webhook/vapi', async (req, res) => {
@@ -32,7 +34,6 @@ router.post('/webhook/vapi', async (req, res) => {
   console.log('Vapi event:', type);
 
   try {
-
     if (type === 'tool-calls') {
       const toolCallList = event.message.toolCallList;
       const clinicId = process.env.DEFAULT_CLINIC_ID!;
@@ -49,8 +50,8 @@ router.post('/webhook/vapi', async (req, res) => {
         console.log(`Tool: ${name}`, JSON.stringify(parameters, null, 2));
 
         let result = '';
-
         const handler = TOOL_HANDLERS[name];
+
         if (handler) {
           try {
             result = await handler(clinicId, callId, parameters);
@@ -60,7 +61,7 @@ router.post('/webhook/vapi', async (req, res) => {
           }
         } else {
           console.warn(`Unknown tool: ${name}`);
-          result = 'I could not process that request. Please apologise and offer to have someone call back.';
+          result = 'I could not process that. Please apologise and offer to have someone call back.';
         }
 
         results.push({ toolCallId: toolCall.id, result });
