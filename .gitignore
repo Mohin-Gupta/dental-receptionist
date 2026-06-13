@@ -1,0 +1,16 @@
+# Root
+node_modules/
+
+# API
+api/node_modules/
+api/dist/
+api/.env
+
+# Web
+web/node_modules/
+web/.next/
+web/.env.local
+
+# General
+.DS_Store
+*.log
