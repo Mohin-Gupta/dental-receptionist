@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 import vapiWebhook from './routes/vapi.webhook';
 import authRoutes from './routes/auth';
 import { scheduleDailyAgenda } from './queues/reminderQueue';
+import dashboardRoutes from './routes/dashboard';
+
+
+
 
 dotenv.config();
 
@@ -13,6 +17,7 @@ import './queues/reminderQueue';
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/api', dashboardRoutes);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api', vapiWebhook);
