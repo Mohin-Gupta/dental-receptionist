@@ -16,7 +16,7 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:3001',
-    'https://dental-receptionist.vercel.app',
+    'https://dental-receptionist-three.vercel.app/',
   ],
   credentials: true,
 }));
