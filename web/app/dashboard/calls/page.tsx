@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
-import { format } from 'date-fns';
 import {
   Phone,
   ChevronLeft,
@@ -32,9 +31,16 @@ interface CallsResponse {
   total: number;
 }
 
-function toIST(utcStr: string): string {
-  const d = new Date(new Date(utcStr).getTime() + 5.5 * 60 * 60 * 1000);
-  return format(d, 'MMM d, yyyy · h:mm a');
+function toIST(dateStr: string): string {
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(dateStr));
 }
 
 function formatDuration(secs: number | null): string {
