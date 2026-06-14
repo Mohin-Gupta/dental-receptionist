@@ -70,7 +70,7 @@ export default function DashboardLayout({
         {/* User section */}
         <div className="px-4 py-4 border-t border-gray-800">
           <div className="flex items-center gap-3">
-            <UserButton afterSignOutUrl="/sign-in" />
+            <UserButton />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-white truncate">
                 {user?.firstName} {user?.lastName}
