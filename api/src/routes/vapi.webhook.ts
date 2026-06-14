@@ -71,27 +71,45 @@ router.post('/webhook/vapi', async (req, res) => {
     }
 
     if (type === 'end-of-call-report') {
-      const call = event.message.call;
-      const transcript = event.message.transcript ?? [];
+  const call = event.message.call;
+  const transcript = event.message.transcript ?? [];
+  const duration = call?.duration ?? 0;
+  const clinicId = process.env.DEFAULT_CLINIC_ID!;
 
-      if (call?.id) clearCallState(call.id);
+  if (call?.id) clearCallState(call.id);
 
-      try {
-        const saved = await prisma.callLog.create({
-          data: {
-            clinicId: process.env.DEFAULT_CLINIC_ID!,
-            vapiCallId: call.id,
-            direction: 'inbound',
-            durationSecs: Math.round(call.duration ?? 0),
-            transcript,
-            outcome: 'completed',
-          },
-        });
-        console.log('Call log saved ✓', saved.id);
-      } catch (err: any) {
-        console.error('Call log save failed:', err?.message);
-      }
-    }
+  // Try to find patient by caller phone number
+  const callerPhone = call?.customer?.number ?? call?.customer?.phoneNumber;
+  let patientId: string | undefined;
+
+  if (callerPhone) {
+    const cleanPhone = callerPhone.replace(/\D/g, '').slice(-10);
+    const patient = await prisma.patient.findFirst({
+      where: {
+        clinicId,
+        phone: { endsWith: cleanPhone },
+      },
+    });
+    if (patient) patientId = patient.id;
+  }
+
+  try {
+    const saved = await prisma.callLog.create({
+      data: {
+        clinicId,
+        vapiCallId: call.id,
+        patientId: patientId ?? null,
+        direction: 'inbound',
+        durationSecs: Math.round(duration),
+        transcript,
+        outcome: 'completed',
+      },
+    });
+    console.log('Call log saved ✓', saved.id);
+  } catch (err: any) {
+    console.error('Call log save failed:', err?.message);
+  }
+}
 
     res.json({ received: true });
 
