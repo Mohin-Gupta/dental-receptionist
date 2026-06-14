@@ -7,7 +7,14 @@ const api = axios.create({
 
 export default api;
 
-// Types
+export interface Patient {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  createdAt: string;
+}
+
 export interface Appointment {
   id: string;
   reason: string;
@@ -16,34 +23,23 @@ export interface Appointment {
   status: string;
   confirmed: boolean;
   createdAt: string;
-  patient: {
-    id: string;
-    name: string;
-    phone: string;
-  };
+  patient: Patient;
 }
 
 export interface CallLog {
   id: string;
   vapiCallId: string;
   direction: string;
-  durationSecs: number;
-  outcome: string;
+  durationSecs: number | null;
+  outcome: string | null;
   createdAt: string;
-  transcript: { role: string; content: string }[];
-  patient?: {
-    name: string;
-    phone: string;
-  };
+  transcript: string | null;
+  patient?: Patient;
 }
 
-export interface Patient {
-  id: string;
-  name: string;
-  phone: string;
-  email?: string;
-  createdAt: string;
+export interface PatientWithStats extends Patient {
   appointments: Appointment[];
+  _count: { appointments: number };
 }
 
 export interface DashboardStats {
@@ -52,4 +48,33 @@ export interface DashboardStats {
   totalPatients: number;
   callsToday: number;
   todayAppointmentsList: Appointment[];
+}
+
+export interface ClinicSettings {
+  id: string;
+  name: string;
+  phone: string;
+  timezone: string;
+  googleCalendarId: string | null;
+  businessHours: Record<string, { open: string; close: string } | null>;
+  aiPersonality: Record<string, string>;
+  planTier: string;
+  doctorName: string | null;
+  doctorPhone: string | null;
+  doctorQualification: string | null;
+  doctorYOE: number | null;
+  doctorSpecialty: string | null;
+  clinicAddress: string | null;
+  clinicEmail: string | null;
+  clinicWebsite: string | null;
+  clinicAbout: string | null;
+  clinicServices: string[] | null;
+  createdAt: string;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
 }
