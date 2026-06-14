@@ -170,7 +170,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-6 lg:p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-white">
           Overview
@@ -182,21 +182,20 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
         {statCards.map((card) => (
           <StatCard key={card.label} {...card} />
         ))}
       </div>
 
-      <div className="bg-gray-900 rounded-xl border border-gray-800">
-        <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div className="px-4 md:px-6 py-4 border-b border-gray-800 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
           <h2 className="text-sm font-semibold text-white">
             Today&apos;s Schedule
           </h2>
 
           <span className="text-xs text-gray-400">
-            {stats?.todayAppointmentsList?.length ?? 0}{' '}
-            appointments
+            {stats?.todayAppointmentsList?.length ?? 0} appointments
           </span>
         </div>
 
@@ -209,20 +208,20 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="divide-y divide-gray-800">
-            {stats.todayAppointmentsList.map(
-              (appt: Appointment) => {
-                const config =
-                  STATUS_CONFIG[appt.status] ??
-                  STATUS_CONFIG.completed;
+            {stats.todayAppointmentsList.map((appt: Appointment) => {
+              const config =
+                STATUS_CONFIG[appt.status] ??
+                STATUS_CONFIG.completed;
 
-                const StatusIcon = config.icon;
+              const StatusIcon = config.icon;
 
-                return (
-                  <div
-                    key={appt.id}
-                    className="px-6 py-4 flex items-center justify-between hover:bg-gray-800/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
+              return (
+                <div
+                  key={appt.id}
+                  className="p-4 md:px-6 md:py-4 hover:bg-gray-800/50 transition-colors"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-blue-600/20 flex items-center justify-center">
                         <span className="text-blue-400 text-sm font-semibold">
                           {appt.patient.name
@@ -242,7 +241,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="text-sm font-medium text-white">
                         {toIST(appt.startAt)}
                       </span>
@@ -262,9 +261,9 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
-                );
-              }
-            )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
