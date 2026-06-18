@@ -1,4 +1,5 @@
 import { getAvailableSlots } from '../services/googleCalendar';
+import { getClinicTimezone, isTodayInTimezone, parseInTimezone } from '../lib/timezone';
 import { slotCache } from './state';
 
 export async function checkAvailability(
@@ -6,11 +7,13 @@ export async function checkAvailability(
   callId: string,
   parameters: any
 ): Promise<string> {
-  const requestedDate = new Date(parameters.date + 'T00:00:00+05:30');
-  const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  const diffDays = Math.floor(
-    (requestedDate.getTime() - nowIST.getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const timezone = await getClinicTimezone(clinicId);
+
+  // Check 7-day limit using clinic's local "today"
+  const nowInTz = parseInTimezone(new Date().toISOString(), timezone);
+  const requestedDate = new Date(parameters.date + 'T00:00:00Z');
+  const todayDate = new Date(Date.UTC(nowInTz.year, nowInTz.month - 1, nowInTz.day));
+  const diffDays = Math.floor((requestedDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays > 7) {
     const callBackDate = new Date(requestedDate.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -36,9 +39,9 @@ export async function checkAvailability(
     slots: slots.map(s => ({ start: s.start, label: s.label })),
   };
 
-  const first4 = slots.slice(0, 4).map(s => s.label).join(', ');
+  const first4   = slots.slice(0, 4).map(s => s.label).join(', ');
   const lastSlot = slots[slots.length - 1].label;
-  const total = slots.length;
+  const total    = slots.length;
 
   return `${total} slots on ${parameters.date}. First 4: ${first4}.${total > 4 ? ` More up to ${lastSlot}.` : ''} Read first 4 naturally. Use validateSlot for specific time requests.`;
 }

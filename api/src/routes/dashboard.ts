@@ -2,8 +2,13 @@ import { Router, Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { sendSMS } from '../services/twilio';
 import {
-  toISTString,
-  addMinutesToISTString,
+  toClinicTimeString,
+  addMinutesToClinicString,
+  formatInTimezone,
+  getTodayRangeInTimezone,
+  getClinicTimezone,
+} from '../lib/timezone';
+import {
   deleteCalendarEvent,
   createCalendarEvent,
 } from '../services/googleCalendar';
@@ -14,11 +19,9 @@ const router = Router();
 // ── Stats ─────────────────────────────────────────────────────────────────────
 router.get('/dashboard/stats', async (_req: Request, res: Response) => {
   const clinicId = process.env.DEFAULT_CLINIC_ID!;
-  const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  const todayStart = new Date(Date.UTC(
-    nowIST.getUTCFullYear(), nowIST.getUTCMonth(), nowIST.getUTCDate(), 3, 30, 0
-  ));
-  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+
+  const timezone = await getClinicTimezone(clinicId);
+  const { todayStart, todayEnd } = getTodayRangeInTimezone(timezone);
   const now = new Date();
 
   const [
@@ -57,6 +60,7 @@ router.get('/dashboard/stats', async (_req: Request, res: Response) => {
     }),
   ]);
 
+  // Return timezone so the frontend can format times correctly
   res.json({
     todayAppointments,
     upcomingAppointments,
@@ -65,6 +69,7 @@ router.get('/dashboard/stats', async (_req: Request, res: Response) => {
     totalPatients,
     callsToday,
     todayAppointmentsList,
+    timezone,
   });
 });
 
@@ -84,11 +89,7 @@ router.get('/dashboard/appointments', async (req: Request, res: Response) => {
   let where: WhereClause = { clinicId };
 
   if (tab === 'upcoming') {
-    where = {
-      clinicId,
-      startAt: { gte: now },
-      status: { in: ['scheduled', 'confirmed'] },
-    };
+    where = { clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } };
   } else if (tab === 'past') {
     where = { clinicId, status: 'completed' };
   } else if (tab === 'cancelled') {
@@ -106,7 +107,9 @@ router.get('/dashboard/appointments', async (req: Request, res: Response) => {
     prisma.appointment.count({ where }),
   ]);
 
-  res.json({ appointments, total, page: parseInt(page as string), tab });
+  const timezone = await getClinicTimezone(clinicId);
+
+  res.json({ appointments, total, page: parseInt(page as string), tab, timezone });
 });
 
 // ── Single appointment ────────────────────────────────────────────────────────
@@ -125,8 +128,6 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
   const { id } = req.params;
   const { newDate, newTime } = req.body as { newDate: string; newTime: string };
 
-  console.log('Reschedule request:', { id, newDate, newTime });
-
   if (!newDate || !newTime) {
     return res.status(400).json({ error: 'newDate and newTime are required' });
   }
@@ -136,64 +137,54 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
     include: { patient: true, clinic: true },
   });
 
-  if (!oldAppointment) {
-    return res.status(404).json({ error: 'Appointment not found' });
-  }
-
+  if (!oldAppointment) return res.status(404).json({ error: 'Appointment not found' });
   if (oldAppointment.status === 'cancelled') {
     return res.status(400).json({ error: 'Cannot reschedule a cancelled appointment' });
   }
 
+  const timezone = oldAppointment.clinic.timezone ?? 'Asia/Kolkata';
+
   const [year, month, day] = newDate.split('-').map(Number);
   const [hour, min] = newTime.split(':').map(Number);
 
-  const startAtIST = toISTString(year, month, day, hour, min);
-  const endAtIST = addMinutesToISTString(startAtIST, 30);
-  const startAtDate = new Date(startAtIST);
-  const endAtDate = new Date(endAtIST);
+  const startAtStr = toClinicTimeString(year, month, day, hour, min, timezone);
+  const endAtStr   = addMinutesToClinicString(startAtStr, 30, timezone);
+  const startAtDate = new Date(startAtStr);
+  const endAtDate   = new Date(endAtStr);
 
-  console.log('New slot IST:', startAtIST);
+  console.log(`Reschedule: new slot in ${timezone}:`, startAtStr);
 
-  // Delete old calendar event
   if (oldAppointment.googleEventId) {
     try {
       await deleteCalendarEvent(clinicId, oldAppointment.googleEventId);
-      console.log('Old calendar event deleted ✓');
     } catch (err) {
       console.warn('Old calendar delete failed (continuing):', err);
     }
   }
 
-  // Cancel old appointment in DB
-  await prisma.appointment.update({
-    where: { id },
-    data: { status: 'cancelled' },
-  });
+  await prisma.appointment.update({ where: { id }, data: { status: 'cancelled' } });
+  await cancelReminders(id);
 
-  // Create new calendar event
   const googleEventId = await createCalendarEvent(clinicId, {
-    patientName: oldAppointment.patient.name,
+    patientName:  oldAppointment.patient.name,
     patientPhone: oldAppointment.patient.phone,
-    reason: oldAppointment.reason,
-    startAt: startAtIST,
-    endAt: endAtIST,
+    reason:       oldAppointment.reason,
+    startAt:      startAtStr,
+    endAt:        endAtStr,
   });
 
-  // Create new appointment
   const newAppointment = await prisma.appointment.create({
     data: {
       clinicId,
-      patientId: oldAppointment.patientId,
-      reason: oldAppointment.reason,
-      startAt: startAtDate,
-      endAt: endAtDate,
-      status: 'scheduled',
+      patientId:    oldAppointment.patientId,
+      reason:       oldAppointment.reason,
+      startAt:      startAtDate,
+      endAt:        endAtDate,
+      status:       'scheduled',
       googleEventId,
     },
   });
 
-  // Cancel old reminders, schedule new ones
-  await cancelReminders(id);
   await scheduleReminders(
     newAppointment.id,
     oldAppointment.patient.phone,
@@ -202,22 +193,12 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
     startAtDate
   );
 
-  // Notify patient
+  // Notify patient via SMS
   const phone = oldAppointment.patient.phone.startsWith('+')
     ? oldAppointment.patient.phone
     : `+91${oldAppointment.patient.phone}`;
   const firstName = oldAppointment.patient.name.split(' ')[0];
-
-  const istMs = startAtDate.getTime() + 5.5 * 60 * 60 * 1000;
-  const ist = new Date(istMs);
-  const h = ist.getUTCHours();
-  const m = ist.getUTCMinutes();
-  const period = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-  const readableTime = `${hour12}${minuteStr} ${period}`;
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const readableDate = `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`;
+  const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
 
   try {
     await sendSMS(phone,
@@ -242,56 +223,34 @@ router.patch('/dashboard/appointments/:id/cancel', async (req: Request, res: Res
   const clinicId = process.env.DEFAULT_CLINIC_ID!;
   const { id } = req.params;
 
-  console.log('Cancel request for appointment:', id);
-
   const appointment = await prisma.appointment.findUnique({
     where: { id },
     include: { patient: true, clinic: true },
   });
 
-  if (!appointment) {
-    return res.status(404).json({ error: 'Appointment not found' });
-  }
-
+  if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
   if (appointment.status === 'cancelled') {
     return res.status(400).json({ error: 'Appointment is already cancelled' });
   }
 
-  // Delete Google Calendar event
+  const timezone = appointment.clinic.timezone ?? 'Asia/Kolkata';
+
   if (appointment.googleEventId) {
     try {
       await deleteCalendarEvent(clinicId, appointment.googleEventId);
-      console.log('Calendar event deleted ✓');
     } catch (err) {
       console.warn('Calendar delete failed (continuing):', err);
     }
   }
 
-  // Update DB
-  await prisma.appointment.update({
-    where: { id },
-    data: { status: 'cancelled' },
-  });
-
-  // Cancel reminders
+  await prisma.appointment.update({ where: { id }, data: { status: 'cancelled' } });
   await cancelReminders(id);
 
-  // Notify patient
   const phone = appointment.patient.phone.startsWith('+')
     ? appointment.patient.phone
     : `+91${appointment.patient.phone}`;
   const firstName = appointment.patient.name.split(' ')[0];
-
-  const istMs = appointment.startAt.getTime() + 5.5 * 60 * 60 * 1000;
-  const ist = new Date(istMs);
-  const h = ist.getUTCHours();
-  const m = ist.getUTCMinutes();
-  const period = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-  const readableTime = `${hour12}${minuteStr} ${period}`;
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const readableDate = `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`;
+  const { readableTime, readableDate } = formatInTimezone(appointment.startAt, timezone);
 
   try {
     await sendSMS(phone,
@@ -304,10 +263,7 @@ router.patch('/dashboard/appointments/:id/cancel', async (req: Request, res: Res
     console.warn('SMS failed (non-fatal):', err);
   }
 
-  res.json({
-    success: true,
-    message: `Appointment cancelled. Patient notified via SMS.`,
-  });
+  res.json({ success: true, message: `Appointment cancelled. Patient notified via SMS.` });
 });
 
 // ── Patients ──────────────────────────────────────────────────────────────────
@@ -366,7 +322,9 @@ router.get('/dashboard/calls', async (req: Request, res: Response) => {
     prisma.callLog.count({ where: { clinicId } }),
   ]);
 
-  res.json({ calls, total });
+  const timezone = await getClinicTimezone(clinicId);
+
+  res.json({ calls, total, timezone });
 });
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -382,6 +340,7 @@ router.patch('/dashboard/settings', async (req: Request, res: Response) => {
   const clinicId = process.env.DEFAULT_CLINIC_ID!;
   const body = req.body as {
     name?: string;
+    timezone?: string;
     doctorName?: string;
     doctorPhone?: string;
     doctorQualification?: string;
@@ -398,18 +357,19 @@ router.patch('/dashboard/settings', async (req: Request, res: Response) => {
   const updated = await prisma.clinic.update({
     where: { id: clinicId },
     data: {
-      name: body.name,
-      doctorName: body.doctorName,
-      doctorPhone: body.doctorPhone,
+      name:               body.name,
+      timezone:           body.timezone,
+      doctorName:         body.doctorName,
+      doctorPhone:        body.doctorPhone,
       doctorQualification: body.doctorQualification,
-      doctorYOE: body.doctorYOE ? parseInt(body.doctorYOE) : undefined,
-      doctorSpecialty: body.doctorSpecialty,
-      clinicAddress: body.clinicAddress,
-      clinicEmail: body.clinicEmail,
-      clinicWebsite: body.clinicWebsite,
-      clinicAbout: body.clinicAbout,
-      clinicServices: body.clinicServices,
-      businessHours: body.businessHours,
+      doctorYOE:          body.doctorYOE ? parseInt(body.doctorYOE) : undefined,
+      doctorSpecialty:    body.doctorSpecialty,
+      clinicAddress:      body.clinicAddress,
+      clinicEmail:        body.clinicEmail,
+      clinicWebsite:      body.clinicWebsite,
+      clinicAbout:        body.clinicAbout,
+      clinicServices:     body.clinicServices,
+      businessHours:      body.businessHours,
     },
   });
 

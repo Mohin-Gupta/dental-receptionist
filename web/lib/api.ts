@@ -50,6 +50,7 @@ export interface DashboardStats {
   totalPatients: number;
   callsToday: number;
   todayAppointmentsList: Appointment[];
+  timezone: string; // IANA timezone string e.g. "Asia/Kolkata", "America/New_York"
 }
 
 export interface AppointmentsResponse {
@@ -57,6 +58,13 @@ export interface AppointmentsResponse {
   total: number;
   page: number;
   tab: string;
+  timezone: string; // IANA timezone string
+}
+
+export interface CallsResponse {
+  calls: CallLog[];
+  total: number;
+  timezone: string; // IANA timezone string
 }
 
 export interface RescheduleResponse {
@@ -97,4 +105,65 @@ export interface PaginatedResponse<T> {
 export interface CancelResponse {
   success: boolean;
   message: string;
+}
+
+// ── Timezone formatting helpers (used across all dashboard pages) ─────────────
+
+/**
+ * Formats a UTC date string for display in the given IANA timezone.
+ * Falls back to "Asia/Kolkata" if timezone is missing (backward compat).
+ */
+export function formatDateTime(utcStr: string, timezone: string = 'Asia/Kolkata'): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    month:    'short',
+    day:      'numeric',
+    year:     'numeric',
+    hour:     'numeric',
+    minute:   '2-digit',
+    hour12:   true,
+  }).format(new Date(utcStr));
+}
+
+/** Formats time only (e.g. "10:30 AM") in the given timezone. */
+export function formatTime(utcStr: string, timezone: string = 'Asia/Kolkata'): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour:     'numeric',
+    minute:   '2-digit',
+    hour12:   true,
+  }).format(new Date(utcStr));
+}
+
+/** Formats date only (e.g. "Jun 15, 2025") in the given timezone. */
+export function formatDate(utcStr: string, timezone: string = 'Asia/Kolkata'): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    month:    'short',
+    day:      'numeric',
+    year:     'numeric',
+  }).format(new Date(utcStr));
+}
+
+/** Returns the current local date/time in the given timezone as a Date-like object for display. */
+export function nowInTimezone(timezone: string = 'Asia/Kolkata'): {
+  formatted: string;
+  time: string;
+} {
+  const now = new Date();
+  return {
+    formatted: new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday:  'long',
+      month:    'long',
+      day:      'numeric',
+      year:     'numeric',
+    }).format(now),
+    time: new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour:     'numeric',
+      minute:   '2-digit',
+      hour12:   true,
+    }).format(now),
+  };
 }

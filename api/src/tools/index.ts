@@ -6,4 +6,3 @@ export { findAppointment } from './findAppointment';
 export { cancelAppointment } from './cancelAppointment';
 export { rescheduleAppointment } from './rescheduleAppointment';
 export { bookAppointment } from './bookAppointment';
-export { confirmDoctorAppointment } from './confirmDoctorAppointment';

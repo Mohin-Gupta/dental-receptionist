@@ -3,6 +3,7 @@ import { Redis } from 'ioredis';
 import { prisma } from '../lib/prisma';
 import { sendSMS } from '../services/twilio';
 import { placeOutboundCall } from '../services/vapiOutbound';
+import { formatInTimezone, isWithinHours, getClinicTimezone, getTodayRangeInTimezone } from '../lib/timezone';
 
 const connection = new Redis(process.env.REDIS_URL!, {
   maxRetriesPerRequest: null,
@@ -10,85 +11,7 @@ const connection = new Redis(process.env.REDIS_URL!, {
 
 export const reminderQueue = new Queue('reminders', { connection });
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getISTHour(): number {
-  return new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-}
-
-function isWithinCallHours(): boolean {
-  const hour = getISTHour();
-  return hour >= 8 && hour < 21;
-}
-
-function formatAppointmentTime(startAt: Date): {
-  readableTime: string;
-  readableDate: string;
-} {
-  const istMs = startAt.getTime() + 5.5 * 60 * 60 * 1000;
-  const ist = new Date(istMs);
-  const h = ist.getUTCHours();
-  const m = ist.getUTCMinutes();
-  const period = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  const minuteStr = m === 0 ? '' : `:${m.toString().padStart(2, '0')}`;
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
-    'Jul','Aug','Sep','Oct','Nov','Dec'];
-  return {
-    readableTime: `${hour12}${minuteStr} ${period}`,
-    readableDate: `${monthNames[ist.getUTCMonth()]} ${ist.getUTCDate()}`,
-  };
-}
-
-async function sendPatientReminder(
-  phone: string,
-  firstName: string,
-  clinicName: string,
-  readableTime: string,
-  readableDate: string,
-  appointmentId: string
-): Promise<void> {
-  try {
-    await placeOutboundCall(
-      phone,
-      process.env.VAPI_REMINDER_ASSISTANT_ID!,
-      { patientName: firstName, clinicName, appointmentTime: readableTime, appointmentDate: readableDate }
-    );
-    console.log('Patient reminder call placed ✓');
-  } catch (err: any) {
-    console.error('Patient reminder call failed — SMS fallback:', err?.message);
-    await sendSMS(phone,
-      `Hi ${firstName}, reminder from ${clinicName}: ` +
-      `your appointment is today at ${readableTime}. ` +
-      `To reschedule please call us. Do not reply to this message.`
-    );
-  }
-  await prisma.reminderJob.updateMany({
-    where: { appointmentId, type: '6h' },
-    data: { status: 'sent', sentAt: new Date() },
-  });
-}
-
-async function sendFallbackSMS(
-  phone: string,
-  firstName: string,
-  clinicName: string,
-  readableTime: string,
-  appointmentId: string
-): Promise<void> {
-  await sendSMS(phone,
-    `Hi ${firstName}, reminder from ${clinicName}: ` +
-    `your appointment is today at ${readableTime}. ` +
-    `To reschedule please call us. Do not reply to this message.`
-  );
-  await prisma.reminderJob.updateMany({
-    where: { appointmentId, type: '6h' },
-    data: { status: 'sent', sentAt: new Date() },
-  });
-  console.log(`Fallback SMS sent ✓ to ${phone}`);
-}
-
-// ── Schedule reminders ────────────────────────────────────────────────────────
+// ── Schedule reminders after booking ─────────────────────────────────────────
 
 export async function scheduleReminders(
   appointmentId: string,
@@ -98,71 +21,79 @@ export async function scheduleReminders(
   startAt: Date
 ): Promise<void> {
   const now = Date.now();
-  const apptMs = startAt.getTime();
-  const ms24h = now + 30000;  //apptMs - 24 * 60 * 60 * 1000;
-  const ms6h  = now + 60000;  //apptMs - 6  * 60 * 60 * 1000;
+  const ms60min   = startAt.getTime() - 60 * 60 * 1000;
+  const msFeedback = startAt.getTime() + 60 * 60 * 1000;
 
-  if (ms24h > now) {
-    const job24 = await reminderQueue.add(
-      '24h-sms',
-      { appointmentId, patientPhone, patientName, clinicName, type: '24h' },
+  if (ms60min > now) {
+    const job = await reminderQueue.add(
+      '60min-reminder',
+      { appointmentId, patientPhone, patientName, clinicName, type: '60min' },
       {
-        delay: ms24h - now,
+        delay: ms60min - now,
         attempts: 3,
         backoff: { type: 'exponential', delay: 60000 },
-        jobId: `24h-${appointmentId}`,
+        jobId: `60min-${appointmentId}`,
       }
     );
+
     await prisma.reminderJob.create({
       data: {
         appointmentId,
-        type: '24h',
-        channel: 'sms',
-        bullJobId: job24.id ?? undefined,
-        scheduledAt: new Date(ms24h),
+        type: '60min',
+        channel: 'call',
+        bullJobId: job.id ?? undefined,
+        scheduledAt: new Date(ms60min),
         status: 'pending',
       },
     });
-    console.log(`24h SMS scheduled ✓ fires at ${new Date(ms24h).toISOString()}`);
+
+    console.log(`60-min reminder scheduled ✓ fires at ${new Date(ms60min).toISOString()}`);
+  } else {
+    console.log(`Appointment is within 60 minutes — skipping reminder job`);
   }
 
-  if (ms6h > now) {
-    const job6 = await reminderQueue.add(
-      '6h-call',
-      { appointmentId, patientPhone, patientName, clinicName, type: '6h' },
+  if (msFeedback > now) {
+    const feedbackJob = await reminderQueue.add(
+      'feedback-sms',
+      { appointmentId, patientPhone, patientName, clinicName, type: 'feedback' },
       {
-        delay: ms6h - now,
-        attempts: 3,
+        delay: msFeedback - now,
+        attempts: 2,
         backoff: { type: 'exponential', delay: 60000 },
-        jobId: `6h-${appointmentId}`,
+        jobId: `feedback-${appointmentId}`,
       }
     );
+
     await prisma.reminderJob.create({
       data: {
         appointmentId,
-        type: '6h',
-        channel: 'call',
-        bullJobId: job6.id ?? undefined,
-        scheduledAt: new Date(ms6h),
+        type: 'feedback',
+        channel: 'sms',
+        bullJobId: feedbackJob.id ?? undefined,
+        scheduledAt: new Date(msFeedback),
         status: 'pending',
       },
     });
-    console.log(`6h reminder scheduled ✓ fires at ${new Date(ms6h).toISOString()}`);
+
+    console.log(`Feedback SMS scheduled ✓ fires at ${new Date(msFeedback).toISOString()}`);
   }
 }
 
-// ── Cancel reminders ──────────────────────────────────────────────────────────
+// ── Cancel reminders (on cancel or reschedule) ────────────────────────────────
 
 export async function cancelReminders(appointmentId: string): Promise<void> {
   try {
-    const job24 = await reminderQueue.getJob(`24h-${appointmentId}`);
-    if (job24) await job24.remove();
-    const job6 = await reminderQueue.getJob(`6h-${appointmentId}`);
-    if (job6) await job6.remove();
+    const job60 = await reminderQueue.getJob(`60min-${appointmentId}`);
+    if (job60) await job60.remove();
+
+    const jobFeedback = await reminderQueue.getJob(`feedback-${appointmentId}`);
+    if (jobFeedback) await jobFeedback.remove();
+
     await prisma.reminderJob.updateMany({
       where: { appointmentId, status: 'pending' },
       data: { status: 'cancelled' },
     });
+
     console.log(`Reminders cancelled ✓ for ${appointmentId}`);
   } catch (err: any) {
     console.warn('Cancel reminders error:', err?.message);
@@ -182,7 +113,7 @@ export async function scheduleDailyAgenda(): Promise<void> {
     'daily-agenda',
     { type: 'agenda', clinicId: process.env.DEFAULT_CLINIC_ID },
     {
-      repeat: { pattern : '30 3 * * *' }, // 9:00 AM IST = 3:30 AM UTC      repeat: { pattern : '30 3 * * *' },
+      repeat: { pattern: '30 3 * * *' }, // 9:00 AM IST = 3:30 AM UTC
       jobId: 'daily-agenda',
     }
   );
@@ -193,28 +124,22 @@ export async function scheduleDailyAgenda(): Promise<void> {
 
 export async function scheduleAppointmentStatusUpdater(): Promise<void> {
   const existing = await reminderQueue.getRepeatableJobs();
-
   for (const job of existing) {
     if (job.name === 'update-appointment-status') {
       await reminderQueue.removeRepeatableByKey(job.key);
     }
   }
-
   await reminderQueue.add(
     'update-appointment-status',
     { type: 'status-update' },
     {
-      repeat: {
-        every: 60 * 60 * 1000, // every hour
-      },
+      repeat: { every: 60 * 60 * 1000 },
       jobId: 'update-appointment-status',
     }
   );
-
-  console.log(
-    'Appointment status updater scheduled ✓ runs every hour'
-  );
+  console.log('Appointment status updater scheduled ✓ runs every hour');
 }
+
 // ── Worker ────────────────────────────────────────────────────────────────────
 
 export const reminderWorker = new Worker(
@@ -224,33 +149,22 @@ export const reminderWorker = new Worker(
 
     console.log(`=== REMINDER JOB === type: ${type}`);
 
+    // ── Hourly status updater ─────────────────────────────────────────────────
     if (type === 'status-update') {
-      const now = new Date();
-
       const updated = await prisma.appointment.updateMany({
         where: {
-          status: {
-            in: ['scheduled', 'confirmed'],
-          },
-          endAt: {
-            lt: now,
-          },
+          status: { in: ['scheduled', 'confirmed'] },
+          endAt: { lt: new Date() },
         },
-        data: {
-          status: 'completed',
-        },
+        data: { status: 'completed' },
       });
-
       if (updated.count > 0) {
-        console.log(
-          `Marked ${updated.count} appointments as completed ✓`
-        );
+        console.log(`Marked ${updated.count} appointments as completed ✓`);
       }
-
       return;
     }
 
-    // ── Daily agenda ──────────────────────────────────────────────────────────
+    // ── Daily agenda SMS to doctor ────────────────────────────────────────────
     if (type === 'agenda') {
       const { clinicId } = job.data;
 
@@ -260,12 +174,8 @@ export const reminderWorker = new Worker(
         return;
       }
 
-      const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-      const todayStart = new Date(Date.UTC(
-        nowIST.getUTCFullYear(), nowIST.getUTCMonth(), nowIST.getUTCDate(),
-        3, 30, 0
-      ));
-      const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+      const timezone = clinic.timezone ?? 'Asia/Kolkata';
+      const { todayStart, todayEnd } = getTodayRangeInTimezone(timezone);
 
       const appointments = await prisma.appointment.findMany({
         where: {
@@ -283,31 +193,31 @@ export const reminderWorker = new Worker(
 
       if (appointments.length === 0) {
         await sendSMS(doctorPhone,
-          `Good morning Doctor. ` 
-        );  //`Good morning Doctor. No appointments scheduled for today at ${clinic.name}. ` +
-          //`Have a great day! Do not reply to this message.`
+          `Good morning Doctor. No appointments scheduled for today at ${clinic.name}. ` +
+          `Have a great day! Do not reply to this message.`
+        );
         console.log('No appointments today — agenda SMS sent to doctor ✓');
         return;
       }
 
       const agendaList = appointments.map((a, i) => {
-        const { readableTime } = formatAppointmentTime(a.startAt);
+        const { readableTime } = formatInTimezone(a.startAt, timezone);
         return `${i + 1}. ${a.patient.name} at ${readableTime} — ${a.reason}`;
       }).join('. ');
 
       await sendSMS(doctorPhone,
-        `Good morning Doctor.`
-      );  /*`Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. ` +
+        `Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. ` +
         `Total: ${appointments.length} appointment${appointments.length > 1 ? 's' : ''}. ` +
-        `Do not reply to this message.`*/
-
+        `Do not reply to this message.`
+      );
       console.log(`Daily agenda SMS sent to doctor ✓ — ${appointments.length} appointments`);
       return;
     }
 
-    // ── Appointment reminders — verify appointment still active ───────────────
+    // ── Load appointment + clinic timezone for reminder jobs ──────────────────
     const appointment = await prisma.appointment.findUnique({
       where: { id: appointmentId },
+      include: { clinic: true },
     });
 
     if (!appointment || appointment.status === 'cancelled') {
@@ -315,116 +225,68 @@ export const reminderWorker = new Worker(
       return;
     }
 
-    const { readableTime, readableDate } = formatAppointmentTime(appointment.startAt);
+    const timezone = appointment.clinic.timezone ?? 'Asia/Kolkata';
+    const { readableTime, readableDate } = formatInTimezone(appointment.startAt, timezone);
     const firstName = patientName.split(' ')[0];
     const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
 
-    // ── 24h SMS ───────────────────────────────────────────────────────────────
-    if (type === '24h') {
-      await sendSMS(phone,
-        `Hi ${firstName}, reminder from ${clinicName}: ` +
-        `you have an appointment tomorrow (${readableDate}) at ${readableTime}. ` +
-        `To reschedule please call us. Do not reply to this message.`
-      );
+    // ── 60-min pre-appointment reminder ──────────────────────────────────────
+    if (type === '60min') {
+      const canCall = isWithinHours(timezone, 8, 21);
+      console.log(`canCall (8am–9pm in ${timezone}): ${canCall}`);
+
+      if (canCall) {
+        try {
+          await placeOutboundCall(
+            phone,
+            process.env.VAPI_REMINDER_ASSISTANT_ID!,
+            { patientName: firstName, clinicName, appointmentTime: readableTime, appointmentDate: readableDate }
+          );
+          console.log('60-min reminder call placed ✓');
+        } catch (err: any) {
+          console.error('60-min reminder call failed — SMS fallback:', err?.message);
+          await sendSMS(phone,
+            `Hi ${firstName}, reminder from ${clinicName}: your appointment is in 1 hour at ${readableTime}. ` +
+            `Please call us if you need to reschedule. Do not reply to this message.`
+          );
+        }
+      } else {
+        console.log(`Outside call hours in ${timezone} — sending SMS reminder`);
+        await sendSMS(phone,
+          `Hi ${firstName}, reminder from ${clinicName}: your appointment is in 1 hour at ${readableTime}. ` +
+          `Please call us if you need to reschedule. Do not reply to this message.`
+        );
+      }
+
       await prisma.reminderJob.updateMany({
-        where: { appointmentId, type: '24h' },
+        where: { appointmentId, type: '60min' },
         data: { status: 'sent', sentAt: new Date() },
       });
-      console.log(`24h SMS sent ✓ to ${phone}`);
+
+      console.log(`60-min reminder done ✓`);
+      return;
     }
 
-    // ── 6h call with doctor confirmation ─────────────────────────────────────
-    if (type === '6h') {
-      const canCall = isWithinCallHours();
-      console.log(`IST hour: ${getISTHour()} — canCall: ${canCall}`);
-
-      if (!canCall) {
-        console.log('Outside call hours — SMS to patient');
-        await sendFallbackSMS(phone, firstName, clinicName, readableTime, appointmentId);
-        return;
-      }
-
-      // Check if doctor phone is set
-      const clinic = await prisma.clinic.findUnique({
-        where: { id: appointment.clinicId },
-      });
-
-      const doctorPhone = clinic?.doctorPhone ?? process.env.DOCTOR_PHONE;
-
-      if (!doctorPhone) {
-        console.log('No doctor phone — sending patient reminder directly');
-        await sendPatientReminder(phone, firstName, clinicName, readableTime, readableDate, appointmentId);
-        return;
-      }
-
-      const formattedDoctorPhone = doctorPhone.startsWith('+')
-        ? doctorPhone
-        : `+91${doctorPhone}`;
-
-      // Fetch full appointment details for doctor call
-      const apptWithPatient = await prisma.appointment.findUnique({
-        where: { id: appointmentId },
-        include: { patient: true },
-      });
-
-      try {
-        console.log('Calling doctor to confirm appointment...');
-
-        await placeOutboundCall(
-          formattedDoctorPhone,
-          process.env.VAPI_DOCTOR_CONFIRM_ASSISTANT_ID!,
-          {
-            patientName: apptWithPatient?.patient.name ?? patientName,
-            clinicName,
-            appointmentTime: readableTime,
-            appointmentDate: readableDate,
-            appointmentReason: apptWithPatient?.reason ?? 'appointment',
-            appointmentId,
-          }
-        );
-
-        console.log('Doctor confirmation call placed ✓');
-        // Patient reminder fires from confirmDoctorAppointment tool response
-        await prisma.reminderJob.updateMany({
-          where: { appointmentId, type: '6h' },
-          data: { status: 'sent', sentAt: new Date() },
-        });
-
-      } catch (err: any) {
-        // Doctor call failed — send patient reminder directly, change nothing
-        console.error('Doctor call failed — sending patient reminder directly:', err?.message);
-        await sendPatientReminder(phone, firstName, clinicName, readableTime, readableDate, appointmentId);
-      }
-    }
-
-    // ── Feedback call 24h after appointment ───────────────────────────────────
+    // ── Feedback SMS 60 min after appointment ─────────────────────────────────
     if (type === 'feedback') {
-      const { reason } = job.data;
-
-      if (appointment.status === 'cancelled') {
-        console.log('Appointment cancelled — skipping feedback');
-        return;
-      }
-
-      if (!isWithinCallHours()) {
-        console.log('Outside call hours — skipping feedback call');
-        return;
-      }
-
       try {
-        await placeOutboundCall(
-          phone,
-          process.env.VAPI_FEEDBACK_ASSISTANT_ID!,
-          {
-            patientName: firstName,
-            clinicName,
-            appointmentReason: reason ?? 'your visit',
-          }
+        await sendSMS(phone,
+          `Hi ${firstName}, we hope your visit to ${clinicName} went well! ` +
+          `Your satisfaction means a lot to us — feel free to call us anytime. ` +
+          `Do not reply to this message.`
         );
-        console.log(`Feedback call placed ✓ to ${phone}`);
+        console.log(`Feedback SMS sent ✓ to ${phone}`);
       } catch (err: any) {
-        console.error('Feedback call failed:', err?.message);
+        console.error('Feedback SMS failed (non-fatal):', err?.message);
       }
+
+      await prisma.reminderJob.updateMany({
+        where: { appointmentId, type: 'feedback' },
+        data: { status: 'sent', sentAt: new Date() },
+      });
+
+      console.log(`Feedback job done ✓`);
+      return;
     }
 
     console.log(`=== REMINDER JOB DONE === type: ${type}`);

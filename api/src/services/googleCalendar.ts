@@ -1,41 +1,32 @@
 import { google } from 'googleapis';
 import { prisma } from '../lib/prisma';
+import {
+  toClinicTimeString,
+  addMinutesToClinicString,
+  parseInTimezone,
+  isTodayInTimezone,
+  getOffsetString,
+} from '../lib/timezone';
 
-const IST_OFFSET = '+05:30';
+// ── Legacy export aliases ─────────────────────────────────────────────────────
+// bookAppointment.ts and rescheduleAppointment.ts call toISTString / addMinutesToISTString.
+// These now delegate to the timezone-aware versions using the clinic's timezone.
+// Both functions require clinicId context — callers that pass (year,month,day,hour,min)
+// directly are migrated in their own files. These aliases are kept for any
+// remaining call sites and will be removed in a future cleanup.
 
+/** @deprecated Use toClinicTimeString from lib/timezone instead */
 export function toISTString(year: number, month: number, day: number, hour: number, minute: number): string {
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${IST_OFFSET}`;
+  // Falls back to IST for backward compat — new code always passes timezone explicitly
+  return toClinicTimeString(year, month, day, hour, minute, 'Asia/Kolkata');
 }
 
-function parseISTString(isoStr: string): { year: number; month: number; day: number; hour: number; minute: number } {
-  const dt = new Date(isoStr);
-  const istMs = dt.getTime() + 5.5 * 60 * 60 * 1000;
-  const ist = new Date(istMs);
-  return {
-    year: ist.getUTCFullYear(),
-    month: ist.getUTCMonth() + 1,
-    day: ist.getUTCDate(),
-    hour: ist.getUTCHours(),
-    minute: ist.getUTCMinutes(),
-  };
-}
-
+/** @deprecated Use addMinutesToClinicString from lib/timezone instead */
 export function addMinutesToISTString(isoStr: string, minutes: number): string {
-  const { year, month, day, hour, minute } = parseISTString(isoStr);
-  const totalMinutes = hour * 60 + minute + minutes;
-  const newHour = Math.floor(totalMinutes / 60) % 24;
-  const newMinute = totalMinutes % 60;
-  const extraDays = Math.floor(totalMinutes / (60 * 24));
-  const baseDate = new Date(Date.UTC(year, month - 1, day + extraDays));
-  return toISTString(
-    baseDate.getUTCFullYear(),
-    baseDate.getUTCMonth() + 1,
-    baseDate.getUTCDate(),
-    newHour,
-    newMinute
-  );
+  return addMinutesToClinicString(isoStr, minutes, 'Asia/Kolkata');
 }
+
+// ── OAuth ─────────────────────────────────────────────────────────────────────
 
 function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -85,12 +76,17 @@ async function getAuthenticatedClient(clinicId: string) {
   return { oauth2Client, clinic };
 }
 
+// ── Availability ──────────────────────────────────────────────────────────────
+
 export async function getAvailableSlots(
   clinicId: string,
   dateStr: string
 ): Promise<{ start: string; end: string; label: string }[]> {
   const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  // Use clinic timezone — falls back to IST for existing clinics
+  const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
   const businessHours = clinic.businessHours as Record<string, { open: string; close: string } | null>;
 
@@ -110,39 +106,35 @@ export async function getAvailableSlots(
   const [closeHour, closeMin] = hours.close.split(':').map(Number);
 
   // For today, start from next available slot (current time + 30min buffer)
-  const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  const isToday =
-    nowIST.getUTCFullYear() === year &&
-    nowIST.getUTCMonth() + 1 === month &&
-    nowIST.getUTCDate() === day;
+  const isToday = isTodayInTimezone(dateStr, timezone);
+  const nowInTz = parseInTimezone(new Date().toISOString(), timezone);
 
   let startHour = openHour;
   let startMin = openMin;
 
   if (isToday) {
-    const nowMins = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes() + 30;
+    const nowMins = nowInTz.hour * 60 + nowInTz.minute + 30;
     const roundedHour = Math.floor(nowMins / 60);
     const roundedMin = nowMins % 60 >= 30 ? 30 : 0;
     startHour = roundedMin === 0 ? roundedHour : roundedHour;
     startMin = roundedMin;
 
-    // If current time already past close, return empty
     if (startHour * 60 + startMin >= closeHour * 60 + closeMin) {
       console.log('No more slots today — all slots have passed');
       return [];
     }
   }
 
-  const dayStartIST = toISTString(year, month, day, startHour, startMin);
-  const dayEndIST = toISTString(year, month, day, closeHour, closeMin);
+  const dayStartStr = toClinicTimeString(year, month, day, startHour, startMin, timezone);
+  const dayEndStr   = toClinicTimeString(year, month, day, closeHour, closeMin, timezone);
 
-  console.log(`Querying freebusy: ${dayStartIST} → ${dayEndIST}`);
+  console.log(`Querying freebusy: ${dayStartStr} → ${dayEndStr}`);
 
   const freeBusy = await calendar.freebusy.query({
     requestBody: {
-      timeMin: dayStartIST,
-      timeMax: dayEndIST,
-      timeZone: 'Asia/Kolkata',
+      timeMin: dayStartStr,
+      timeMax: dayEndStr,
+      timeZone: timezone,
       items: [{ id: clinic.googleCalendarId ?? 'primary' }],
     },
   });
@@ -159,11 +151,11 @@ export async function getAvailableSlots(
   let curMin = startMin;
 
   while (curHour * 60 + curMin + SLOT_MINUTES <= closeHour * 60 + closeMin) {
-    const slotStartIST = toISTString(year, month, day, curHour, curMin);
-    const slotEndIST = addMinutesToISTString(slotStartIST, SLOT_MINUTES);
+    const slotStartStr = toClinicTimeString(year, month, day, curHour, curMin, timezone);
+    const slotEndStr   = addMinutesToClinicString(slotStartStr, SLOT_MINUTES, timezone);
 
-    const slotStartMs = new Date(slotStartIST).getTime();
-    const slotEndMs = new Date(slotEndIST).getTime();
+    const slotStartMs = new Date(slotStartStr).getTime();
+    const slotEndMs   = new Date(slotEndStr).getTime();
 
     // Skip past slots
     if (slotStartMs <= Date.now()) {
@@ -175,31 +167,33 @@ export async function getAvailableSlots(
 
     const isBusy = busySlots.some((busy) => {
       const busyStart = new Date(busy.start!).getTime();
-      const busyEnd = new Date(busy.end!).getTime();
+      const busyEnd   = new Date(busy.end!).getTime();
       return slotStartMs < busyEnd && slotEndMs > busyStart;
     });
 
     if (!isBusy) {
-      const period = curHour >= 12 ? 'PM' : 'AM';
-      const hour12 = curHour % 12 === 0 ? 12 : curHour % 12;
+      const period  = curHour >= 12 ? 'PM' : 'AM';
+      const hour12  = curHour % 12 === 0 ? 12 : curHour % 12;
       const minuteStr = curMin === 0 ? '00' : curMin.toString().padStart(2, '0');
-      const label = `${hour12}:${minuteStr} ${period}`;
+      const label   = `${hour12}:${minuteStr} ${period}`;
 
       slots.push({
         start: `${curHour.toString().padStart(2, '0')}:${curMin.toString().padStart(2, '0')}`,
-        end: addMinutesToISTString(slotStartIST, SLOT_MINUTES).slice(11, 16),
+        end:   addMinutesToClinicString(slotStartStr, SLOT_MINUTES, timezone).slice(11, 16),
         label,
       });
     }
 
     const totalMin = curHour * 60 + curMin + SLOT_MINUTES;
     curHour = Math.floor(totalMin / 60);
-    curMin = totalMin % 60;
+    curMin  = totalMin % 60;
   }
 
-  console.log(`Available slots (IST):`, slots);
+  console.log(`Available slots (${timezone}):`, slots);
   return slots;
 }
+
+// ── Calendar event CRUD ───────────────────────────────────────────────────────
 
 export async function createCalendarEvent(
   clinicId: string,
@@ -213,14 +207,15 @@ export async function createCalendarEvent(
 ): Promise<string> {
   const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
   const event = await calendar.events.insert({
     calendarId: clinic.googleCalendarId ?? 'primary',
     requestBody: {
       summary: `${appointment.patientName} — ${appointment.reason}`,
       description: `Patient phone: ${appointment.patientPhone}\nBooked by Maya (AI Receptionist)`,
-      start: { dateTime: appointment.startAt, timeZone: 'Asia/Kolkata' },
-      end: { dateTime: appointment.endAt, timeZone: 'Asia/Kolkata' },
+      start: { dateTime: appointment.startAt, timeZone: timezone },
+      end:   { dateTime: appointment.endAt,   timeZone: timezone },
     },
   });
 
@@ -255,13 +250,14 @@ export async function updateCalendarEvent(
 ): Promise<void> {
   const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
   const patch: Record<string, unknown> = {};
   if (update.patientName || update.reason) {
     patch.summary = `${update.patientName ?? ''} — ${update.reason ?? ''}`.trim();
   }
-  if (update.startAt) patch.start = { dateTime: update.startAt, timeZone: 'Asia/Kolkata' };
-  if (update.endAt) patch.end = { dateTime: update.endAt, timeZone: 'Asia/Kolkata' };
+  if (update.startAt) patch.start = { dateTime: update.startAt, timeZone: timezone };
+  if (update.endAt)   patch.end   = { dateTime: update.endAt,   timeZone: timezone };
 
   await calendar.events.patch({
     calendarId: clinic.googleCalendarId ?? 'primary',
