@@ -189,6 +189,32 @@ export async function scheduleDailyAgenda(): Promise<void> {
   console.log('Daily agenda job registered ✓ fires at 9:00 AM IST');
 }
 
+// ── Mark past appointments as completed ───────────────────────────────────────
+
+export async function scheduleAppointmentStatusUpdater(): Promise<void> {
+  const existing = await reminderQueue.getRepeatableJobs();
+
+  for (const job of existing) {
+    if (job.name === 'update-appointment-status') {
+      await reminderQueue.removeRepeatableByKey(job.key);
+    }
+  }
+
+  await reminderQueue.add(
+    'update-appointment-status',
+    { type: 'status-update' },
+    {
+      repeat: {
+        every: 60 * 60 * 1000, // every hour
+      },
+      jobId: 'update-appointment-status',
+    }
+  );
+
+  console.log(
+    'Appointment status updater scheduled ✓ runs every hour'
+  );
+}
 // ── Worker ────────────────────────────────────────────────────────────────────
 
 export const reminderWorker = new Worker(
@@ -197,6 +223,32 @@ export const reminderWorker = new Worker(
     const { appointmentId, patientPhone, patientName, clinicName, type } = job.data;
 
     console.log(`=== REMINDER JOB === type: ${type}`);
+
+    if (type === 'status-update') {
+      const now = new Date();
+
+      const updated = await prisma.appointment.updateMany({
+        where: {
+          status: {
+            in: ['scheduled', 'confirmed'],
+          },
+          endAt: {
+            lt: now,
+          },
+        },
+        data: {
+          status: 'completed',
+        },
+      });
+
+      if (updated.count > 0) {
+        console.log(
+          `Marked ${updated.count} appointments as completed ✓`
+        );
+      }
+
+      return;
+    }
 
     // ── Daily agenda ──────────────────────────────────────────────────────────
     if (type === 'agenda') {

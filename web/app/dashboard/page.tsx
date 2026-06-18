@@ -144,7 +144,7 @@ export default function DashboardPage() {
       border: 'border-blue-400/20',
     },
     {
-      label: 'Upcoming total',
+      label: 'Upcoming',
       value: stats?.upcomingAppointments ?? 0,
       icon: TrendingUp,
       color: 'text-purple-400',
@@ -183,10 +183,38 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
-        {statCards.map((card) => (
-          <StatCard key={card.label} {...card} />
-        ))}
-      </div>
+          {statCards.map((card) => (
+            <StatCard key={card.label} {...card} />
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+          <div className="bg-gray-900 rounded-xl border border-gray-800/50 p-5 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-gray-400" />
+            </div>
+
+            <div>
+              <p className="text-xs text-gray-500">Past appointments</p>
+              <p className="text-2xl font-bold text-gray-300">
+                {stats?.pastAppointments ?? 0}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-gray-900 rounded-xl border border-gray-800/50 p-5 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+              <XCircle className="w-5 h-5 text-red-400" />
+            </div>
+
+            <div>
+              <p className="text-xs text-gray-500">Cancelled</p>
+              <p className="text-2xl font-bold text-red-400">
+                {stats?.cancelledAppointments ?? 0}
+              </p>
+            </div>
+          </div>
+        </div>
 
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
         <div className="px-4 md:px-6 py-4 border-b border-gray-800 flex flex-col md:flex-row md:items-center md:justify-between gap-2">

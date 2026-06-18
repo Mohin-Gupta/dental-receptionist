@@ -45,9 +45,24 @@ export interface PatientWithStats extends Patient {
 export interface DashboardStats {
   todayAppointments: number;
   upcomingAppointments: number;
+  pastAppointments: number;
+  cancelledAppointments: number;
   totalPatients: number;
   callsToday: number;
   todayAppointmentsList: Appointment[];
+}
+
+export interface AppointmentsResponse {
+  appointments: Appointment[];
+  total: number;
+  page: number;
+  tab: string;
+}
+
+export interface RescheduleResponse {
+  success: boolean;
+  appointment: Appointment;
+  message: string;
 }
 
 export interface ClinicSettings {
@@ -77,4 +92,9 @@ export interface PaginatedResponse<T> {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface CancelResponse {
+  success: boolean;
+  message: string;
 }
