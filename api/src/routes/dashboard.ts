@@ -42,7 +42,12 @@ router.get('/dashboard/stats', async (_req: Request, res: Response) => {
       where: { clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } },
     }),
     prisma.appointment.count({
-      where: { clinicId, status: 'completed' },
+      // Same time-based logic as the 'past' tab — not dependent on the cron job
+      where: {
+        clinicId,
+        endAt: { lt: now },
+        status: { in: ['scheduled', 'confirmed', 'completed'] },
+      },
     }),
     prisma.appointment.count({
       where: { clinicId, status: 'cancelled' },
@@ -84,6 +89,7 @@ router.get('/dashboard/appointments', async (req: Request, res: Response) => {
   type WhereClause = {
     clinicId: string;
     startAt?: { gte?: Date; lt?: Date };
+    endAt?: { lt?: Date };
     status?: string | { in: string[] };
   };
 
@@ -92,7 +98,15 @@ router.get('/dashboard/appointments', async (req: Request, res: Response) => {
   if (tab === 'upcoming') {
     where = { clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } };
   } else if (tab === 'past') {
-    where = { clinicId, status: 'completed' };
+    // Classified by endAt time, not by the 'completed' status flag — this no longer
+    // depends on the hourly status-updater cron job having run. An appointment whose
+    // endAt has already passed is "past" regardless of whether the background job
+    // flipped its status yet. Still excludes cancelled (that has its own tab).
+    where = {
+      clinicId,
+      endAt: { lt: now },
+      status: { in: ['scheduled', 'confirmed', 'completed'] },
+    };
   } else if (tab === 'cancelled') {
     where = { clinicId, status: 'cancelled' };
   }
@@ -455,18 +469,26 @@ router.get('/dashboard/patients', async (req: Request, res: Response) => {
 // ── Call logs ─────────────────────────────────────────────────────────────────
 router.get('/dashboard/calls', async (req: Request, res: Response) => {
   const clinicId = process.env.DEFAULT_CLINIC_ID!;
-  const { page = '1', limit = '20' } = req.query;
+  const { page = '1', limit = '20', direction } = req.query as {
+    page?: string;
+    limit?: string;
+    direction?: 'inbound' | 'outbound';
+  };
   const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
+
+  const where = direction
+    ? { clinicId, direction }
+    : { clinicId };
 
   const [calls, total] = await Promise.all([
     prisma.callLog.findMany({
-      where: { clinicId },
+      where,
       include: { patient: true },
       orderBy: { createdAt: 'desc' },
       skip,
       take: parseInt(limit as string),
     }),
-    prisma.callLog.count({ where: { clinicId } }),
+    prisma.callLog.count({ where }),
   ]);
 
   const timezone = await getClinicTimezone(clinicId);

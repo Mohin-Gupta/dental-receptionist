@@ -30,6 +30,7 @@ export interface CallLog {
   id: string;
   vapiCallId: string;
   direction: string;
+  phoneNumber: string | null; // raw number from the call, saved directly regardless of patient match
   durationSecs: number | null;
   outcome: string | null;
   createdAt: string;

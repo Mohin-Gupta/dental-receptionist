@@ -19,11 +19,20 @@ function formatDuration(secs: number | null): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+// Always shows the number saved directly on the call log — only falls back
+// to a generic label if the webhook genuinely could not extract one.
+function getDisplayPhone(call: CallsResponse['calls'][number]): string {
+  return call.phoneNumber ?? call.patient?.phone ?? 'No number recorded';
+}
+
+type DirectionTab = 'inbound' | 'outbound';
+
 export default function CallLogsPage() {
   const [calls, setCalls] = useState<CallsResponse['calls']>([]);
   const [total, setTotal] = useState(0);
-  const [timezone, setTimezone] = useState('Asia/Kolkata'); // updated once API responds
+  const [timezone, setTimezone] = useState('Asia/Kolkata');
   const [page, setPage] = useState(1);
+  const [activeTab, setActiveTab] = useState<DirectionTab>('inbound');
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -31,18 +40,19 @@ export default function CallLogsPage() {
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
 
     const loadCalls = async () => {
       try {
         const response = await api.get<CallsResponse>('/dashboard/calls', {
-          params: { page, limit: 20 },
+          params: { page, limit: 20, direction: activeTab },
         });
 
         if (!mounted) return;
 
         setCalls(response.data.calls);
         setTotal(response.data.total);
-        setTimezone(response.data.timezone); // clinic's timezone, drives all date formatting below
+        setTimezone(response.data.timezone);
       } catch (err) {
         console.error(err);
       } finally {
@@ -53,13 +63,40 @@ export default function CallLogsPage() {
     loadCalls();
 
     return () => { mounted = false; };
-  }, [page]);
+  }, [page, activeTab]);
+
+  const tabs: { key: DirectionTab; label: string; icon: React.ElementType; description: string }[] = [
+    { key: 'inbound', label: 'Inbound', icon: PhoneIncoming, description: 'Calls Maya answered from patients' },
+    { key: 'outbound', label: 'Outbound', icon: PhoneOutgoing, description: 'Reminder calls Maya made' },
+  ];
 
   return (
     <div className="p-4 md:p-6 lg:p-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Call Logs</h1>
-        <p className="text-sm text-gray-400 mt-1">{total} total calls recorded</p>
+        <p className="text-sm text-gray-400 mt-1">{total} {activeTab} calls recorded</p>
+      </div>
+
+      {/* Inbound / Outbound tabs */}
+      <div className="flex gap-1 mb-5 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
+        {tabs.map(tab => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => { setActiveTab(tab.key); setPage(1); }}
+              title={tab.description}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === tab.key
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -70,14 +107,14 @@ export default function CallLogsPage() {
         ) : calls.length === 0 ? (
           <div className="py-20 text-center">
             <Phone className="w-8 h-8 text-gray-700 mx-auto mb-3" />
-            <p className="text-sm text-gray-500">No calls recorded yet</p>
+            <p className="text-sm text-gray-500">No {activeTab} calls recorded yet</p>
           </div>
         ) : (
           <>
             {/* Desktop Table */}
             <div className="hidden md:block">
               <div className="grid grid-cols-5 px-6 py-3 border-b border-gray-800 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                <span className="col-span-2">Patient</span>
+                <span className="col-span-2">Phone Number</span>
                 <span>Duration</span>
                 <span>Outcome</span>
                 <span>Date & Time</span>
@@ -87,6 +124,7 @@ export default function CallLogsPage() {
                 {calls.map((call) => {
                   const isExpanded = expanded === call.id;
                   const hasTranscript = typeof call.transcript === 'string' && call.transcript.trim().length > 0;
+                  const displayPhone = getDisplayPhone(call);
 
                   return (
                     <div key={call.id}>
@@ -105,8 +143,8 @@ export default function CallLogsPage() {
                             )}
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-white">
-                              {call.patient?.name ?? 'Unknown caller'}
+                            <p className="text-sm font-medium text-white font-mono">
+                              {displayPhone}
                             </p>
                             <p className="text-xs text-gray-500 capitalize">{call.direction} call</p>
                           </div>
@@ -125,7 +163,6 @@ export default function CallLogsPage() {
                         </div>
 
                         <div className="flex items-center justify-between">
-                          {/* Formatted using clinic's timezone, not hardcoded Asia/Kolkata */}
                           <span className="text-sm text-gray-400">{formatDateTime(call.createdAt, timezone)}</span>
                           {hasTranscript && (isExpanded ? (
                             <ChevronUp className="w-4 h-4 text-gray-500" />
@@ -158,6 +195,7 @@ export default function CallLogsPage() {
               {calls.map((call) => {
                 const isExpanded = expanded === call.id;
                 const hasTranscript = typeof call.transcript === 'string' && call.transcript.trim().length > 0;
+                const displayPhone = getDisplayPhone(call);
 
                 return (
                   <div key={call.id}>
@@ -174,7 +212,7 @@ export default function CallLogsPage() {
                             )}
                           </div>
                           <div>
-                            <p className="text-white font-medium">{call.patient?.name ?? 'Unknown caller'}</p>
+                            <p className="text-white font-medium font-mono">{displayPhone}</p>
                             <p className="text-xs text-gray-500 capitalize">{call.direction} call</p>
                           </div>
                         </div>
@@ -199,7 +237,6 @@ export default function CallLogsPage() {
 
                       <div className="mt-4">
                         <p className="text-gray-500 text-xs mb-1">Date & Time</p>
-                        {/* Formatted using clinic's timezone, not hardcoded Asia/Kolkata */}
                         <p className="text-gray-300 text-sm">{formatDateTime(call.createdAt, timezone)}</p>
                       </div>
                     </div>

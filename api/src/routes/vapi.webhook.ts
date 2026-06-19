@@ -23,8 +23,63 @@ const TOOL_HANDLERS: Record<string, (clinicId: string, callId: string, params: a
   cancelAppointment:     (c, _id, p) => cancelAppointment(c, p),
   rescheduleAppointment: (c, _id, p) => rescheduleAppointment(c, p),
   bookAppointment:       (c, id, p)  => bookAppointment(c, id, p),
-  // confirmDoctorAppointment removed — doctor confirmation flow deprecated
 };
+
+// ── Duration extraction ───────────────────────────────────────────────────────
+function extractDurationSecs(message: any): number | null {
+  const call = message.call;
+
+  if (typeof message.durationSeconds === 'number') {
+    return Math.round(message.durationSeconds);
+  }
+
+  if (typeof message.durationMs === 'number') {
+    return Math.round(message.durationMs / 1000);
+  }
+
+  if (typeof call?.duration === 'number' && call.duration > 0) {
+    return call.duration > 10000 ? Math.round(call.duration / 1000) : Math.round(call.duration);
+  }
+
+  const startedAt = call?.startedAt ?? message.startedAt;
+  const endedAt   = call?.endedAt ?? message.endedAt;
+
+  if (startedAt && endedAt) {
+    const diffMs = new Date(endedAt).getTime() - new Date(startedAt).getTime();
+    if (diffMs > 0) return Math.round(diffMs / 1000);
+  }
+
+  console.warn('Could not extract call duration from any known field. Payload keys:', Object.keys(message));
+  return null;
+}
+
+// ── Direction + phone number extraction ───────────────────────────────────────
+// Vapi's call.type tells us inbound vs outbound. The "other party's" phone
+// number lives under call.customer.number for BOTH directions in Vapi's
+// payload shape — it always refers to whoever isn't Maya, regardless of
+// who initiated the call. We save this directly on the CallLog row so the
+// admin panel never has to fall back to a patient record that may not exist.
+function extractDirectionAndPhone(message: any): { direction: 'inbound' | 'outbound'; phoneNumber: string | null } {
+  const call = message.call;
+
+  const direction: 'inbound' | 'outbound' =
+    call?.type === 'outboundPhoneCall' ? 'outbound' : 'inbound';
+
+  const rawNumber =
+    call?.customer?.number ??
+    call?.customer?.phoneNumber ??
+    message.customer?.number ??
+    message.customer?.phoneNumber ??
+    call?.phoneNumber ??
+    null;
+
+  if (!rawNumber) {
+    console.warn('Could not extract phone number from call payload. call.customer:', JSON.stringify(call?.customer));
+    return { direction, phoneNumber: null };
+  }
+
+  return { direction, phoneNumber: rawNumber };
+}
 
 router.post('/webhook/vapi', async (req, res) => {
   const event = req.body;
@@ -70,16 +125,21 @@ router.post('/webhook/vapi', async (req, res) => {
     if (type === 'end-of-call-report') {
       const call       = event.message.call;
       const transcript = event.message.transcript ?? [];
-      const duration   = call?.duration ?? 0;
       const clinicId   = process.env.DEFAULT_CLINIC_ID!;
 
       if (call?.id) clearCallState(call.id);
 
-      const callerPhone = call?.customer?.number ?? call?.customer?.phoneNumber;
+      const durationSecs = extractDurationSecs(event.message);
+      const { direction, phoneNumber } = extractDirectionAndPhone(event.message);
+
+      console.log('Extracted duration (secs):', durationSecs);
+      console.log('Extracted direction:', direction, '— phone:', phoneNumber);
+
+      // Match to a patient record if one exists — purely for linking, not for display
       let patientId: string | undefined;
 
-      if (callerPhone) {
-        const cleanPhone = callerPhone.replace(/\D/g, '').slice(-10);
+      if (phoneNumber) {
+        const cleanPhone = phoneNumber.replace(/\D/g, '').slice(-10);
         const patient = await prisma.patient.findFirst({
           where: { clinicId, phone: { endsWith: cleanPhone } },
         });
@@ -92,13 +152,14 @@ router.post('/webhook/vapi', async (req, res) => {
             clinicId,
             vapiCallId:  call.id,
             patientId:   patientId ?? null,
-            direction:   'inbound',
-            durationSecs: Math.round(duration),
+            direction,
+            phoneNumber: phoneNumber ?? null, // saved directly, independent of patient match
+            durationSecs,
             transcript,
             outcome:     'completed',
           },
         });
-        console.log('Call log saved ✓', saved.id);
+        console.log('Call log saved ✓', saved.id, '—', direction, '—', phoneNumber, '—', durationSecs, 'secs');
       } catch (err: any) {
         console.error('Call log save failed:', err?.message);
       }

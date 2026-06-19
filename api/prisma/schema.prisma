@@ -79,6 +79,7 @@ model Appointment {
 
 model CallLog {
   id              String   @id @default(uuid())
+  phoneNumber     String?
   clinicId        String
   patientId       String?
   appointmentId   String?
