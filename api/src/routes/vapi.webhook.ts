@@ -14,11 +14,13 @@ import {
 
 const router = Router();
 
-const TOOL_HANDLERS: Record<string, (clinicId: string, callId: string, params: any) => Promise<string>> = {
+// confirmDetails now optionally accepts the caller's number as a 3rd arg,
+// so its signature differs slightly from the other handlers below.
+const TOOL_HANDLERS: Record<string, (clinicId: string, callId: string, params: any, callerNumber?: string) => Promise<string> | string> = {
   checkAvailability:     (c, id, p) => checkAvailability(c, id, p),
   validateSlot:          (c, id, p) => validateSlot(c, id, p),
-  storeName:             (_c, id, p) => Promise.resolve(storeName(id, p)),
-  confirmDetails:        (_c, id, p) => Promise.resolve(confirmDetails(id, p)),
+  storeName:             (_c, id, p) => storeName(id, p),
+  confirmDetails:        (_c, id, p, callerNumber) => confirmDetails(id, p, callerNumber),
   findAppointment:       (c, _id, p) => findAppointment(c, p),
   cancelAppointment:     (c, _id, p) => cancelAppointment(c, p),
   rescheduleAppointment: (c, _id, p) => rescheduleAppointment(c, p),
@@ -32,11 +34,9 @@ function extractDurationSecs(message: any): number | null {
   if (typeof message.durationSeconds === 'number') {
     return Math.round(message.durationSeconds);
   }
-
   if (typeof message.durationMs === 'number') {
     return Math.round(message.durationMs / 1000);
   }
-
   if (typeof call?.duration === 'number' && call.duration > 0) {
     return call.duration > 10000 ? Math.round(call.duration / 1000) : Math.round(call.duration);
   }
@@ -54,11 +54,6 @@ function extractDurationSecs(message: any): number | null {
 }
 
 // ── Direction + phone number extraction ───────────────────────────────────────
-// Vapi's call.type tells us inbound vs outbound. The "other party's" phone
-// number lives under call.customer.number for BOTH directions in Vapi's
-// payload shape — it always refers to whoever isn't Maya, regardless of
-// who initiated the call. We save this directly on the CallLog row so the
-// admin panel never has to fall back to a patient record that may not exist.
 function extractDirectionAndPhone(message: any): { direction: 'inbound' | 'outbound'; phoneNumber: string | null } {
   const call = message.call;
 
@@ -94,6 +89,11 @@ router.post('/webhook/vapi', async (req, res) => {
       const callId       = event.message.call?.id ?? 'unknown';
       const results      = [];
 
+      // Extract the caller's real number once per webhook event — this is the
+      // actual fix for Maya asking patients to read their number back. It comes
+      // straight from Vapi's call object, not from anything the model decided.
+      const { phoneNumber: callerNumber } = extractDirectionAndPhone(event.message);
+
       for (const toolCall of toolCallList) {
         const name    = toolCall.function.name;
         const rawArgs = toolCall.function.arguments;
@@ -106,7 +106,7 @@ router.post('/webhook/vapi', async (req, res) => {
 
         if (handler) {
           try {
-            result = await handler(clinicId, callId, parameters);
+            result = await handler(clinicId, callId, parameters, callerNumber ?? undefined);
           } catch (err: any) {
             console.error(`Tool ${name} failed:`, err?.message);
             result = 'Something went wrong. Please apologise and tell the patient a team member will call them back.';
@@ -135,7 +135,6 @@ router.post('/webhook/vapi', async (req, res) => {
       console.log('Extracted duration (secs):', durationSecs);
       console.log('Extracted direction:', direction, '— phone:', phoneNumber);
 
-      // Match to a patient record if one exists — purely for linking, not for display
       let patientId: string | undefined;
 
       if (phoneNumber) {
@@ -153,7 +152,7 @@ router.post('/webhook/vapi', async (req, res) => {
             vapiCallId:  call.id,
             patientId:   patientId ?? null,
             direction,
-            phoneNumber: phoneNumber ?? null, // saved directly, independent of patient match
+            phoneNumber: phoneNumber ?? null,
             durationSecs,
             transcript,
             outcome:     'completed',
