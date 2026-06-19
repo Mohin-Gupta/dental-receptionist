@@ -11,8 +11,10 @@ import {
 import {
   deleteCalendarEvent,
   createCalendarEvent,
+  getAvailableSlots,
 } from '../services/googleCalendar';
 import { cancelReminders, scheduleReminders } from '../queues/reminderQueue';
+import { normalizeTime } from '../tools/helpers';
 
 const router = Router();
 
@@ -60,7 +62,6 @@ router.get('/dashboard/stats', async (_req: Request, res: Response) => {
     }),
   ]);
 
-  // Return timezone so the frontend can format times correctly
   res.json({
     todayAppointments,
     upcomingAppointments,
@@ -120,6 +121,153 @@ router.get('/dashboard/appointments/:id', async (req: Request, res: Response) =>
   });
   if (!appointment) return res.status(404).json({ error: 'Not found' });
   res.json(appointment);
+});
+
+// ── Available slots for manual booking ────────────────────────────────────────
+// Used by the admin "New Appointment" modal to show bookable times for a given date.
+// Reuses the exact same getAvailableSlots logic Maya uses on calls — same
+// business hours, same Google Calendar freebusy check, same 30-min slot grid.
+router.get('/dashboard/available-slots', async (req: Request, res: Response) => {
+  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+  const { date } = req.query as { date?: string };
+
+  if (!date) {
+    return res.status(400).json({ error: 'date query param is required (YYYY-MM-DD)' });
+  }
+
+  try {
+    const slots = await getAvailableSlots(clinicId, date);
+    slots.sort((a, b) => {
+      const [aH, aM] = a.start.split(':').map(Number);
+      const [bH, bM] = b.start.split(':').map(Number);
+      return (aH * 60 + aM) - (bH * 60 + bM);
+    });
+    res.json({ date, slots });
+  } catch (err: any) {
+    console.error('Available slots fetch failed:', err?.message);
+    res.status(500).json({ error: 'Failed to fetch available slots' });
+  }
+});
+
+// ── Manual booking from dashboard ─────────────────────────────────────────────
+// Mirrors tools/bookAppointment.ts exactly: find-or-create patient by phone,
+// create Google Calendar event, create Appointment row, send booking
+// confirmation SMS, schedule the 60-min reminder + feedback SMS jobs.
+router.post('/dashboard/appointments', async (req: Request, res: Response) => {
+  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+  const { patientName, patientPhone, date, time, reason } = req.body as {
+    patientName: string;
+    patientPhone: string;
+    date: string;
+    time: string;
+    reason: string;
+  };
+
+  if (!patientName || !patientPhone || !date || !time || !reason) {
+    return res.status(400).json({
+      error: 'patientName, patientPhone, date, time, and reason are all required',
+    });
+  }
+
+  try {
+    const cleanPhone = patientPhone.replace(/\D/g, '');
+    const finalTime = normalizeTime(time);
+    const [year, month, day] = date.split('-').map(Number);
+    const [hour, min] = finalTime.split(':').map(Number);
+
+    const timezone = await getClinicTimezone(clinicId);
+
+    const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
+    const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
+    const startAtDate = new Date(startAtStr);
+    const endAtDate   = new Date(endAtStr);
+
+    if (isNaN(startAtDate.getTime())) {
+      return res.status(400).json({ error: `Invalid date/time: ${date} ${finalTime}` });
+    }
+
+    // Find-or-create patient by phone, same as bookAppointment.ts
+    let patient = await prisma.patient.findUnique({
+      where: { clinicId_phone: { clinicId, phone: cleanPhone } },
+    });
+
+    if (!patient) {
+      patient = await prisma.patient.create({
+        data: { clinicId, name: patientName, phone: cleanPhone },
+      });
+    } else {
+      await prisma.patient.update({
+        where: { id: patient.id },
+        data: { name: patientName },
+      });
+    }
+
+    const googleEventId = await createCalendarEvent(clinicId, {
+      patientName,
+      patientPhone: cleanPhone,
+      reason,
+      startAt: startAtStr,
+      endAt: endAtStr,
+    });
+
+    const appointment = await prisma.appointment.create({
+      data: {
+        clinicId,
+        patientId: patient.id,
+        reason,
+        startAt: startAtDate,
+        endAt: endAtDate,
+        status: 'scheduled',
+        googleEventId,
+      },
+    });
+
+    console.log('Manually booked from dashboard ✓', appointment.id);
+
+    // Booking confirmation SMS — same message format as call bookings
+    try {
+      const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+      const clinicName = clinic?.name ?? 'the clinic';
+      const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
+      const phone = cleanPhone.startsWith('+') ? cleanPhone : `+91${cleanPhone}`;
+      const firstName = patientName.split(' ')[0];
+
+      await sendSMS(phone,
+        `Hi ${firstName}, your appointment at ${clinicName} has been confirmed for ` +
+        `${readableDate} at ${readableTime} (${reason}). ` +
+        `Please call us if you need to reschedule. Do not reply to this message.`
+      );
+      console.log('Booking confirmation SMS sent ✓ (manual booking)');
+    } catch (err: any) {
+      console.warn('Booking confirmation SMS failed (non-fatal):', err?.message);
+    }
+
+    // 60-min reminder + feedback SMS — identical scheduling to call bookings
+    try {
+      const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+      await scheduleReminders(
+        appointment.id,
+        cleanPhone,
+        patientName,
+        clinic?.name ?? 'the clinic',
+        startAtDate
+      );
+      console.log('Reminders scheduled ✓ (manual booking)');
+    } catch (err: any) {
+      console.warn('Reminder scheduling failed (non-fatal):', err?.message);
+    }
+
+    const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
+
+    res.json({
+      success: true,
+      appointment,
+      message: `Booked ${patientName} for ${readableDate} at ${readableTime}. Confirmation SMS sent.`,
+    });
+  } catch (err: any) {
+    console.error('Manual booking failed:', err?.message);
+    res.status(500).json({ error: 'Failed to create appointment. Please try again.' });
+  }
 });
 
 // ── Reschedule from dashboard ─────────────────────────────────────────────────
@@ -193,7 +341,6 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
     startAtDate
   );
 
-  // Notify patient via SMS
   const phone = oldAppointment.patient.phone.startsWith('+')
     ? oldAppointment.patient.phone
     : `+91${oldAppointment.patient.phone}`;

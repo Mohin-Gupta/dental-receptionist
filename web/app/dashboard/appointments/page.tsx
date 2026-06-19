@@ -1,18 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { Appointment, AppointmentsResponse, RescheduleResponse, CancelResponse } from '@/lib/api';
-import { format } from 'date-fns';
+import { useCallback, useEffect, useState } from 'react';
+import api, { Appointment, AppointmentsResponse, RescheduleResponse, CancelResponse, BookResponse, AvailableSlotsResponse, AvailableSlot, formatDateTime } from '@/lib/api';
 import {
   Calendar, ChevronLeft, ChevronRight,
   Clock, CheckCircle, XCircle, AlertCircle,
-  CalendarClock, X, Loader2, Trash2,
+  CalendarClock, X, Loader2, Trash2, Plus,
 } from 'lucide-react';
-
-function toIST(utcStr: string): string {
-  const d = new Date(new Date(utcStr).getTime() + 5.5 * 60 * 60 * 1000);
-  return format(d, 'MMM d, yyyy · h:mm a');
-}
 
 interface StatusConfigItem {
   color: string;
@@ -40,20 +34,239 @@ function StatusBadge({ status }: { status: string }) {
 
 type TabType = 'upcoming' | 'past' | 'cancelled';
 
-// ── Reschedule Modal ──────────────────────────────────────────────────────────
-interface RescheduleModalProps {
-  appointment: Appointment;
+// ── New Appointment Modal ─────────────────────────────────────────────────────
+interface NewAppointmentModalProps {
   onClose: () => void;
   onSuccess: (message: string) => void;
 }
 
-function RescheduleModal({ appointment, onClose, onSuccess }: RescheduleModalProps) {
+function NewAppointmentModal({ onClose, onSuccess }: NewAppointmentModalProps) {
+  const [patientName, setPatientName] = useState('');
+  const [patientPhone, setPatientPhone] = useState('');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+
+  const [slots, setSlots] = useState<AvailableSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState('');
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  // Computed once per mount via useMemo, not directly during render — avoids
+  // calling the impure Date.now()/new Date() during the render pass itself.
+  const [dateLimits] = useState(() => {
+  const now = new Date();
+  const max = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  return {
+    minDate: now.toISOString().split('T')[0],
+    maxDate: max.toISOString().split('T')[0],
+  };
+});
+
+const { minDate, maxDate } = dateLimits;
+
+  // Fetch available slots whenever the date changes — same logic Maya uses on calls
+  useEffect(() => {
+    if (!date) {
+      setSlots([]);
+      setSelectedSlot(null);
+      return;
+    }
+
+    setSlotsLoading(true);
+    setSlotsError('');
+    setSelectedSlot(null);
+
+    api.get<AvailableSlotsResponse>('/dashboard/available-slots', { params: { date } })
+      .then(r => setSlots(r.data.slots))
+      .catch(() => setSlotsError('Failed to load available slots for this date.'))
+      .finally(() => setSlotsLoading(false));
+  }, [date]);
+
+  const handleSubmit = async () => {
+    if (!patientName.trim() || !patientPhone.trim() || !reason.trim() || !date || !selectedSlot) {
+      setError('Please fill in all fields and select a time slot.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+
+    try {
+      const res = await api.post<BookResponse>('/dashboard/appointments', {
+        patientName: patientName.trim(),
+        patientPhone: patientPhone.trim(),
+        date,
+        time: selectedSlot,
+        reason: reason.trim(),
+      });
+      onSuccess(res.data.message);
+      onClose();
+    } catch (err: unknown) {
+      console.error(err);
+      setError('Failed to book appointment.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
+              <Plus className="w-4 h-4 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-white">New Appointment</h3>
+              <p className="text-xs text-gray-400">Book manually — same flow as a phone booking</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 mb-5">
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5">Patient name</label>
+            <input
+              type="text"
+              value={patientName}
+              onChange={e => setPatientName(e.target.value)}
+              placeholder="e.g. Mohan Gupta"
+              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5">Phone number</label>
+            <input
+              type="tel"
+              value={patientPhone}
+              onChange={e => setPatientPhone(e.target.value)}
+              placeholder="e.g. 9876543210"
+              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              If this number already has a patient record, their name will be updated to match.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5">Reason for visit</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Teeth cleaning"
+              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5">Date</label>
+            <input
+              type="date"
+              value={date}
+              min={minDate}
+              max={maxDate}
+              onChange={e => setDate(e.target.value)}
+              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">Bookings are limited to 7 days in advance.</p>
+          </div>
+
+          {date && (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1.5">Available slots</label>
+
+              {slotsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-3">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading slots...
+                </div>
+              ) : slotsError ? (
+                <p className="text-sm text-red-400 py-2">{slotsError}</p>
+              ) : slots.length === 0 ? (
+                <p className="text-sm text-gray-500 py-2">No available slots on this date. Try another day.</p>
+              ) : (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
+                  {slots.map(slot => (
+                    <button
+                      key={slot.start}
+                      onClick={() => setSelectedSlot(slot.start)}
+                      className={`text-xs px-3 py-2 rounded-lg border transition-colors ${
+                        selectedSlot === slot.start
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                      }`}
+                    >
+                      {slot.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="mb-4 px-3 py-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
+            <p className="text-xs text-red-400">{error}</p>
+          </div>
+        )}
+
+        <div className="mb-5 px-3 py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+          <p className="text-xs text-blue-300">
+            The patient will receive a booking confirmation SMS, a reminder call 1 hour before the
+            appointment, and a feedback SMS 1 hour after — same as a phone booking with Maya.
+          </p>
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 text-sm text-gray-300 border border-gray-700 rounded-lg hover:bg-gray-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !selectedSlot}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Booking...</>
+              : <><Plus className="w-4 h-4" /> Book Appointment</>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Reschedule Modal ──────────────────────────────────────────────────────────
+interface RescheduleModalProps {
+  appointment: Appointment;
+  timezone: string;
+  onClose: () => void;
+  onSuccess: (message: string) => void;
+}
+
+function RescheduleModal({ appointment, timezone, onClose, onSuccess }: RescheduleModalProps) {
   const [newDate, setNewDate] = useState('');
   const [newTime, setNewTime] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const minDate = new Date().toISOString().split('T')[0];
+  const [minDate] = useState(
+  () => new Date().toISOString().split('T')[0]
+);
 
   const handleSubmit = async () => {
     if (!newDate || !newTime) {
@@ -98,7 +311,7 @@ function RescheduleModal({ appointment, onClose, onSuccess }: RescheduleModalPro
         <div className="bg-gray-800 rounded-xl p-4 mb-5">
           <p className="text-xs text-gray-500 mb-1">Current appointment</p>
           <p className="text-sm font-medium text-white">{appointment.reason}</p>
-          <p className="text-xs text-gray-400 mt-1">{toIST(appointment.startAt)}</p>
+          <p className="text-xs text-gray-400 mt-1">{formatDateTime(appointment.startAt, timezone)}</p>
         </div>
 
         <div className="space-y-4 mb-5">
@@ -161,11 +374,12 @@ function RescheduleModal({ appointment, onClose, onSuccess }: RescheduleModalPro
 // ── Cancel Confirmation Modal ─────────────────────────────────────────────────
 interface CancelModalProps {
   appointment: Appointment;
+  timezone: string;
   onClose: () => void;
   onSuccess: (message: string) => void;
 }
 
-function CancelModal({ appointment, onClose, onSuccess }: CancelModalProps) {
+function CancelModal({ appointment, timezone, onClose, onSuccess }: CancelModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -207,7 +421,7 @@ function CancelModal({ appointment, onClose, onSuccess }: CancelModalProps) {
         <div className="bg-gray-800 rounded-xl p-4 mb-5">
           <p className="text-xs text-gray-500 mb-1">Appointment to cancel</p>
           <p className="text-sm font-medium text-white">{appointment.reason}</p>
-          <p className="text-xs text-gray-400 mt-1">{toIST(appointment.startAt)}</p>
+          <p className="text-xs text-gray-400 mt-1">{formatDateTime(appointment.startAt, timezone)}</p>
         </div>
 
         <div className="mb-5 px-3 py-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
@@ -249,31 +463,44 @@ function CancelModal({ appointment, onClose, onSuccess }: CancelModalProps) {
 export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [total, setTotal] = useState(0);
+  const [timezone, setTimezone] = useState('Asia/Kolkata');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('upcoming');
   const [page, setPage] = useState(1);
   const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
+  const [showNewModal, setShowNewModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const totalPages = Math.ceil(total / 20);
 
-  const fetchAppointments = () => {
-    setLoading(true);
-    api.get<AppointmentsResponse>('/dashboard/appointments', {
-      params: { tab: activeTab, page, limit: 20 },
+  const fetchAppointments = useCallback(() => {
+  setLoading(true);
+
+  api.get<AppointmentsResponse>('/dashboard/appointments', {
+    params: { tab: activeTab, page, limit: 20 },
+  })
+    .then(r => {
+      setAppointments(r.data.appointments);
+      setTotal(r.data.total);
+      setTimezone(r.data.timezone);
     })
-      .then(r => { setAppointments(r.data.appointments); setTotal(r.data.total); })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  };
+    .catch(console.error)
+    .finally(() => setLoading(false));
+}, [activeTab, page]);
 
-  useEffect(() => { fetchAppointments(); }, [activeTab, page]);
+  useEffect(() => {
+  fetchAppointments();
+}, [fetchAppointments]);
 
-  const handleSuccess = (message: string) => {
-    setSuccessMessage(message);
-    setTimeout(() => setSuccessMessage(''), 5000);
-    fetchAppointments();
-  };
+  const handleSuccess = useCallback((message: string) => {
+  setSuccessMessage(message);
+
+  setTimeout(() => {
+    setSuccessMessage('');
+  }, 5000);
+
+  fetchAppointments();
+}, [fetchAppointments]);
 
   const tabs: { key: TabType; label: string; icon: React.ElementType }[] = [
     { key: 'upcoming', label: 'Upcoming', icon: Clock },
@@ -285,9 +512,19 @@ export default function AppointmentsPage() {
 
   return (
     <div className="p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Appointments</h1>
-        <p className="text-sm text-gray-400 mt-1">{total} {activeTab} appointments</p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Appointments</h1>
+          <p className="text-sm text-gray-400 mt-1">{total} {activeTab} appointments</p>
+        </div>
+
+        <button
+          onClick={() => setShowNewModal(true)}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors w-full sm:w-auto"
+        >
+          <Plus className="w-4 h-4" />
+          New Appointment
+        </button>
       </div>
 
       {successMessage && (
@@ -359,7 +596,7 @@ export default function AppointmentsPage() {
                     <span className="text-sm font-medium text-white truncate">{appt.patient.name}</span>
                   </div>
                   <span className="text-sm text-gray-300 truncate">{appt.reason}</span>
-                  <span className="text-sm text-gray-300">{toIST(appt.startAt)}</span>
+                  <span className="text-sm text-gray-300">{formatDateTime(appt.startAt, timezone)}</span>
                   <StatusBadge status={appt.status} />
                   <span className="text-sm text-gray-400 font-mono">{appt.patient.phone}</span>
                   {showActions && (
@@ -411,9 +648,17 @@ export default function AppointmentsPage() {
         )}
       </div>
 
+      {showNewModal && (
+        <NewAppointmentModal
+          onClose={() => setShowNewModal(false)}
+          onSuccess={handleSuccess}
+        />
+      )}
+
       {rescheduleTarget && (
         <RescheduleModal
           appointment={rescheduleTarget}
+          timezone={timezone}
           onClose={() => setRescheduleTarget(null)}
           onSuccess={handleSuccess}
         />
@@ -422,6 +667,7 @@ export default function AppointmentsPage() {
       {cancelTarget && (
         <CancelModal
           appointment={cancelTarget}
+          timezone={timezone}
           onClose={() => setCancelTarget(null)}
           onSuccess={handleSuccess}
         />

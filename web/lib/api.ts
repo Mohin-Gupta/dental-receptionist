@@ -73,6 +73,30 @@ export interface RescheduleResponse {
   message: string;
 }
 
+export interface CancelResponse {
+  success: boolean;
+  message: string;
+}
+
+// ── Manual booking from admin dashboard ───────────────────────────────────────
+
+export interface AvailableSlot {
+  start: string; // "HH:MM" 24-hour, used as the `time` field when booking
+  end: string;
+  label: string; // human readable e.g. "10:30 AM"
+}
+
+export interface AvailableSlotsResponse {
+  date: string;
+  slots: AvailableSlot[];
+}
+
+export interface BookResponse {
+  success: boolean;
+  appointment: Appointment;
+  message: string;
+}
+
 export interface ClinicSettings {
   id: string;
   name: string;
@@ -100,11 +124,6 @@ export interface PaginatedResponse<T> {
   total: number;
   page: number;
   limit: number;
-}
-
-export interface CancelResponse {
-  success: boolean;
-  message: string;
 }
 
 // ── Timezone formatting helpers (used across all dashboard pages) ─────────────
