@@ -15,7 +15,7 @@ model Clinic {
   googleCalendarId String?
   googleTokens     String?
   businessHours    Json
-  aiPersonality    Json
+  // aiPersonality    Json
   planTier         String   @default("starter")
 
   // Doctor information
@@ -37,8 +37,8 @@ model Clinic {
   patients     Patient[]
   appointments Appointment[]
   callLogs     CallLog[]
-  escalations  Escalation[]
-  callbacks    Callback[]
+  // escalations  Escalation[]
+  // callbacks    Callback[]
 }
 
 model Patient {
@@ -65,14 +65,14 @@ model Appointment {
   endAt         DateTime
   status        String   @default("scheduled")
   googleEventId String?
-  confirmed     Boolean  @default(false)
+  // confirmed     Boolean  @default(false)
   createdAt     DateTime @default(now())
 
   clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient      Patient       @relation(fields: [patientId], references: [id])
   callLogs     CallLog[]
   reminderJobs ReminderJob[]
-  callbacks    Callback[]
+  // callbacks    Callback[]
 
   @@index([clinicId, startAt])
 }
@@ -86,7 +86,7 @@ model CallLog {
   vapiCallId      String   @unique
   direction       String   @default("inbound")
   durationSecs    Int?
-  confidenceScore Float?
+  // confidenceScore Float?
   transcript      Json?
   outcome         String?
   createdAt       DateTime @default(now())
@@ -94,37 +94,37 @@ model CallLog {
   clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient     Patient?     @relation(fields: [patientId], references: [id])
   appointment Appointment? @relation(fields: [appointmentId], references: [id])
-  escalation  Escalation?
+  // escalation  Escalation?
 }
 
-model Escalation {
-  id            String    @id @default(uuid())
-  clinicId      String
-  callLogId     String    @unique
-  reason        String
-  status        String    @default("open")
-  adminNotified String?
-  resolvedAt    DateTime?
-  createdAt     DateTime  @default(now())
+// model Escalation {
+//   id            String    @id @default(uuid())
+//   clinicId      String
+//   callLogId     String    @unique
+//   reason        String
+//   status        String    @default("open")
+//   adminNotified String?
+//   resolvedAt    DateTime?
+//   createdAt     DateTime  @default(now())
 
-  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  callLog CallLog @relation(fields: [callLogId], references: [id])
-}
+//   clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+//   callLog CallLog @relation(fields: [callLogId], references: [id])
+// }
 
-model Callback {
-  id            String    @id @default(uuid())
-  clinicId      String
-  appointmentId String?
-  patientPhone  String
-  reason        String
-  status        String    @default("pending")
-  scheduledAt   DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime  @default(now())
+// model Callback {
+//   id            String    @id @default(uuid())
+//   clinicId      String
+//   appointmentId String?
+//   patientPhone  String
+//   reason        String
+//   status        String    @default("pending")
+//   scheduledAt   DateTime?
+//   completedAt   DateTime?
+//   createdAt     DateTime  @default(now())
 
-  clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  appointment Appointment? @relation(fields: [appointmentId], references: [id])
-}
+//   clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+//   appointment Appointment? @relation(fields: [appointmentId], references: [id])
+// }
 
 model ReminderJob {
   id            String    @id @default(uuid())
