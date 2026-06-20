@@ -38,7 +38,11 @@ export async function checkAvailability(
   });
 
   if (slots.length === 0) {
-    return `No slots on ${parameters.date}. Ask patient to choose another date.`;
+    // Exact required phrasing — without this, the model has invented incorrect
+    // explanations on its own (e.g. claiming the clinic is "closed today" when
+    // it's actually just fully booked, or when the real reason is something else
+    // entirely). Never let the model guess why slots are empty.
+    return `No slots available on ${parameters.date}. Say EXACTLY: "I don't have any openings on that day — would another date work for you?" Do not say the clinic is closed unless this exact message is what you're reading.`;
   }
 
   slotCache[callId] = {
