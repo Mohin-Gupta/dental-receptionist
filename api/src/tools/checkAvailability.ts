@@ -16,11 +16,18 @@ export async function checkAvailability(
   const diffDays = Math.floor((requestedDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays > 7) {
-    const callBackDate = new Date(requestedDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const callBackReadable = callBackDate.toLocaleDateString('en-IN', {
+    // Furthest bookable date is exactly 7 days from today (inclusive) — not
+    // "requested date minus 7," which made the boundary message inconsistent
+    // and confusing across different requested dates (e.g. June 22 vs June 23
+    // produced different, contradictory-sounding cutoff phrasing).
+    const furthestBookableDate = new Date(todayDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const furthestReadable = furthestBookableDate.toLocaleDateString('en-US', {
       weekday: 'long', month: 'long', day: 'numeric',
     });
-    return `Date is more than 7 days away. Say: "We only book up to a week in advance. Please call us back around ${callBackReadable} and we will get you sorted."`;
+
+    // Exact required phrasing — do not let the model paraphrase this, since
+    // paraphrasing produced inconsistent/contradictory cutoff dates across calls.
+    return `Date is more than 7 days away. Say EXACTLY: "We can only book up to ${furthestReadable}. Would you like a date on or before then, or shall I have someone call you back closer to your preferred date?"`;
   }
 
   const slots = await getAvailableSlots(clinicId, parameters.date);

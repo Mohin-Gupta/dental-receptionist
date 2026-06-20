@@ -5,23 +5,13 @@ import {
   addMinutesToClinicString,
   parseInTimezone,
   isTodayInTimezone,
-  getOffsetString,
 } from '../lib/timezone';
 
-// ── Legacy export aliases ─────────────────────────────────────────────────────
-// bookAppointment.ts and rescheduleAppointment.ts call toISTString / addMinutesToISTString.
-// These now delegate to the timezone-aware versions using the clinic's timezone.
-// Both functions require clinicId context — callers that pass (year,month,day,hour,min)
-// directly are migrated in their own files. These aliases are kept for any
-// remaining call sites and will be removed in a future cleanup.
-
-/** @deprecated Use toClinicTimeString from lib/timezone instead */
+// ── Legacy export aliases (kept for any remaining call sites) ────────────────
 export function toISTString(year: number, month: number, day: number, hour: number, minute: number): string {
-  // Falls back to IST for backward compat — new code always passes timezone explicitly
   return toClinicTimeString(year, month, day, hour, minute, 'Asia/Kolkata');
 }
 
-/** @deprecated Use addMinutesToClinicString from lib/timezone instead */
 export function addMinutesToISTString(isoStr: string, minutes: number): string {
   return addMinutesToClinicString(isoStr, minutes, 'Asia/Kolkata');
 }
@@ -85,7 +75,6 @@ export async function getAvailableSlots(
   const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-  // Use clinic timezone — falls back to IST for existing clinics
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
   const businessHours = clinic.businessHours as Record<string, { open: string; close: string } | null>;
@@ -105,22 +94,33 @@ export async function getAvailableSlots(
   const [openHour, openMin] = hours.open.split(':').map(Number);
   const [closeHour, closeMin] = hours.close.split(':').map(Number);
 
-  // For today, start from next available slot (current time + 30min buffer)
   const isToday = isTodayInTimezone(dateStr, timezone);
   const nowInTz = parseInTimezone(new Date().toISOString(), timezone);
 
+  // Default: clinic opening time
   let startHour = openHour;
   let startMin = openMin;
 
   if (isToday) {
-    const nowMins = nowInTz.hour * 60 + nowInTz.minute + 30;
-    const roundedHour = Math.floor(nowMins / 60);
-    const roundedMin = nowMins % 60 >= 30 ? 30 : 0;
-    startHour = roundedMin === 0 ? roundedHour : roundedHour;
-    startMin = roundedMin;
+    // "Now + 30min buffer" — but this must never be EARLIER than the clinic's
+    // actual opening time. Without clamping, a call at 1 AM asking for "today"
+    // would compute a start time of 1:30 AM and show slots hours before the
+    // clinic even opens. We take whichever is LATER: now+30min, or opening time.
+    const nowPlusBufferMins = nowInTz.hour * 60 + nowInTz.minute + 30;
+    const openingMins = openHour * 60 + openMin;
+    const effectiveStartMins = Math.max(nowPlusBufferMins, openingMins);
 
+    // Round up to the nearest 30-min slot boundary
+    const roundedMins = effectiveStartMins % 30 === 0
+      ? effectiveStartMins
+      : effectiveStartMins + (30 - (effectiveStartMins % 30));
+
+    startHour = Math.floor(roundedMins / 60);
+    startMin = roundedMins % 60;
+
+    // If the (clamped, rounded) start time is already past closing, no slots today
     if (startHour * 60 + startMin >= closeHour * 60 + closeMin) {
-      console.log('No more slots today — all slots have passed');
+      console.log('No more slots today — all slots have passed or clinic is closed');
       return [];
     }
   }
@@ -157,7 +157,6 @@ export async function getAvailableSlots(
     const slotStartMs = new Date(slotStartStr).getTime();
     const slotEndMs   = new Date(slotEndStr).getTime();
 
-    // Skip past slots
     if (slotStartMs <= Date.now()) {
       const totalMin = curHour * 60 + curMin + SLOT_MINUTES;
       curHour = Math.floor(totalMin / 60);
