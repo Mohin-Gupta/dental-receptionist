@@ -1,6 +1,6 @@
 'use client';
-
-import { useEffect, useMemo, useState } from 'react';
+import StatCard, { type StatCardProps,} from './components/StatCard';
+import { useEffect, useState } from 'react';
 import api, { DashboardStats, Appointment, formatTime, nowInTimezone } from '@/lib/api';
 import {
   Calendar,
@@ -27,28 +27,6 @@ const STATUS_CONFIG: Record<string, StatusConfigItem> = {
   completed: { color: 'text-gray-400',    bg: 'bg-gray-400/10',    icon: AlertCircle,  label: 'Completed' },
 };
 
-interface StatCardProps {
-  label: string;
-  value: number;
-  icon: React.ElementType;
-  color: string;
-  bg: string;
-  border: string;
-}
-
-function StatCard({ label, value, icon: Icon, color, bg, border }: StatCardProps) {
-  return (
-    <div className={`bg-gray-900 rounded-xl border ${border} p-5`}>
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm text-gray-400">{label}</span>
-        <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center`}>
-          <Icon className={`w-4 h-4 ${color}`} />
-        </div>
-      </div>
-      <p className={`text-3xl font-bold ${color}`}>{value}</p>
-    </div>
-  );
-}
 
 export default function DashboardPage() {
   const [stats, setStats]   = useState<DashboardStats | null>(null);
@@ -66,15 +44,27 @@ export default function DashboardPage() {
   const timezone = stats?.timezone ?? 'Asia/Kolkata';
 
   // Current time displayed in the clinic's timezone, recalculated when timezone loads
-  const { formatted: formattedDate, time: formattedTime } = useMemo(
-    () => nowInTimezone(timezone),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timezone]
+  const [currentTime, setCurrentTime] =
+  useState(nowInTimezone(timezone));
+
+useEffect(() => {
+  setCurrentTime(
+    nowInTimezone(timezone)
   );
+
+  const interval = setInterval(() => {
+    setCurrentTime(
+      nowInTimezone(timezone)
+    );
+  }, 1000);
+
+  return () =>
+    clearInterval(interval);
+}, [timezone]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center min-h-[400px]">
         <div className="flex flex-col items-center gap-3">
           <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           <p className="text-gray-400 text-sm">Loading dashboard...</p>
@@ -85,7 +75,7 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
           <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
           <p className="text-gray-400 text-sm">{error}</p>
@@ -107,7 +97,7 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-bold text-white">Overview</h1>
         {/* Date and time shown in clinic's own timezone */}
         <p className="text-gray-400 text-sm mt-1">
-          {formattedDate} · {formattedTime}
+          {currentTime.formatted} · {currentTime.time}
         </p>
       </div>
 
@@ -169,7 +159,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                       {/* Time formatted in clinic's timezone — not hardcoded IST */}
                       <span className="text-sm font-medium text-white">
                         {formatTime(appt.startAt, timezone)}

@@ -24,6 +24,19 @@ export function currentHourInTz(timezone: string): number {
   );
 }
 
+export function currentMinuteInTz(timezone: string): number {
+  return parseInt(
+    new Intl.DateTimeFormat(
+      'en-US',
+      {
+        timeZone: timezone,
+        minute: 'numeric',
+      }
+    ).format(new Date()),
+    10
+  );
+}
+
 /** True if current time in the given timezone is between startHour and endHour (exclusive). */
 export function isWithinHours(timezone: string, startHour: number, endHour: number): boolean {
   const hour = currentHourInTz(timezone);

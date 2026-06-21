@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { UserButton, useUser } from '@clerk/nextjs';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -107,6 +107,24 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const { user } = useUser();
   const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+  setMobileOpen(false);
+}, [pathname]);
+
+useEffect(() => {
+  if (mobileOpen) {
+    document.body.style.overflow =
+      'hidden';
+  } else {
+    document.body.style.overflow =
+      '';
+  }
+
+  return () => {
+    document.body.style.overflow =
+      '';
+  };
+}, [mobileOpen]);
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -130,12 +148,14 @@ export default function DashboardLayout({
       </header>
 
       {/* Mobile Overlay */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-40 md:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
+      <div
+        onClick={() => setMobileOpen(false)}
+        className={`fixed inset-0 bg-black/60 z-40 md:hidden transition-opacity duration-300 ${
+          mobileOpen
+            ? 'opacity-100 pointer-events-auto'
+            : 'opacity-0 pointer-events-none'
+        }`}
+      />
 
       {/* Mobile Sidebar */}
       <aside
@@ -164,7 +184,7 @@ export default function DashboardLayout({
       </aside>
 
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex fixed left-0 top-0 h-screen w-60 bg-gray-900 border-r border-gray-800 flex-col">
+      <aside className="hidden md:flex fixed left-0 top-0 h-screen w-64 bg-gray-900 border-r border-gray-800 flex-col">
         <SidebarContent
           pathname={pathname}
           firstName={user?.firstName}
@@ -174,7 +194,7 @@ export default function DashboardLayout({
       </aside>
 
       {/* Main Content */}
-      <main className="min-h-screen pt-14 md:pt-0 md:ml-60">
+      <main className="min-h-screen pt-14 md:pt-0 md:ml-64 overflow-x-hidden">
         {children}
       </main>
     </div>
