@@ -4,11 +4,15 @@ import dotenv from 'dotenv';
 import vapiWebhook from './routes/vapi.webhook';
 import authRoutes from './routes/auth';
 import dashboardRoutes from './routes/dashboard';
-import { scheduleDailyAgenda, scheduleAppointmentStatusUpdater } from './queues/reminderQueue';
+import { scheduleDailyAgenda, scheduleAppointmentStatusUpdater } from './queues/repeatableJobs';
 import { prisma } from './lib/prisma';
 dotenv.config();
 
-import './queues/reminderQueue';
+// Starts the worker that processes queued reminder jobs. Must be imported
+// somewhere at startup or jobs will sit in Redis and never run — previously
+// this same side-effect import pointed at reminderQueue.ts directly; now the
+// worker lives in its own file since reminderQueue.ts no longer contains it.
+import './queues/reminderWorker';
 
 const app = express();
 

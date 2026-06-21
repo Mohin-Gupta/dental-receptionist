@@ -1,3 +1,6 @@
+/**
+ * vapiOutbound.ts — places outbound calls (reminders) via the Vapi API.
+ */
 export async function placeOutboundCall(
   patientPhone: string,
   assistantId: string,
@@ -12,9 +15,7 @@ export async function placeOutboundCall(
   };
 
   if (Object.keys(variableValues).length > 0) {
-    body.assistantOverrides = {
-      variableValues,
-    };
+    body.assistantOverrides = { variableValues };
   }
 
   console.log('Placing outbound call to:', phone);
