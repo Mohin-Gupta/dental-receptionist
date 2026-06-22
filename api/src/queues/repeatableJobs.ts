@@ -34,7 +34,7 @@ export async function scheduleDailyAgenda(): Promise<void> {
     },
     {
       repeat: {
-        every: 60 * 60 * 1000,
+        every: 60 * 1000,
       },
       jobId: 'daily-agenda',
     }
