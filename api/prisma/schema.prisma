@@ -17,7 +17,7 @@ model Clinic {
   businessHours    Json
   // aiPersonality    Json
   planTier         String   @default("starter")
-
+  lastAgendaSentDate String?
   // Doctor information
   doctorName        String?
   doctorPhone       String?

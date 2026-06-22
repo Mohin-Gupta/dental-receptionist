@@ -1,19 +1,10 @@
 import { reminderQueue } from './reminderQueue';
 
 /**
- * repeatableJobs.ts — registers the two cron-style repeatable jobs
- * (daily agenda, hourly status updater).
+ * repeatableJobs.ts
  */
 
 export async function scheduleDailyAgenda(): Promise<void> {
-  const jobs =
-    await reminderQueue.getRepeatableJobs();
-
-  console.log(
-    'REPEATABLE JOBS:',
-    jobs
-  );
-
   const existing =
     await reminderQueue.getRepeatableJobs();
 
@@ -41,7 +32,7 @@ export async function scheduleDailyAgenda(): Promise<void> {
   );
 
   console.log(
-    'Daily agenda job registered ✓ runs every hour'
+    'Daily agenda job registered ✓ runs every minute'
   );
 }
 

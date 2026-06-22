@@ -233,3 +233,14 @@ export async function getClinicTimezone(clinicId: string): Promise<string> {
   });
   return clinic?.timezone ?? 'Asia/Kolkata';
 }
+
+export function currentDateInTz(
+  timezone: string
+): string {
+  return new Intl.DateTimeFormat(
+    'en-CA',
+    {
+      timeZone: timezone,
+    }
+  ).format(new Date());
+}

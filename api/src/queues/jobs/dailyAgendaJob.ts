@@ -6,11 +6,17 @@ import {
   getTodayRangeInTimezone,
   currentHourInTz,
   currentMinuteInTz,
+  currentDateInTz,
 } from '../../lib/timezone';
 
 /**
- * dailyAgendaJob.ts — sends the doctor a morning SMS
- * listing today's appointments.
+ * Sends the doctor's daily agenda at 9:00 AM
+ * in the clinic's local timezone.
+ *
+ * Multi-tenant safe:
+ * - Uses clinic timezone
+ * - Sends only once per local day
+ * - Handles DST automatically
  */
 export async function runDailyAgendaJob(
   clinicId: string
@@ -31,15 +37,30 @@ export async function runDailyAgendaJob(
     clinic.timezone ??
     'Asia/Kolkata';
 
-  const currentHour = currentHourInTz(timezone);
-  const currentMinute = currentMinuteInTz(timezone);
+  const currentHour =
+    currentHourInTz(timezone);
 
-  if (false) {
-      console.log(
-        `Skipping agenda — current time in ${timezone} is ${currentHour}:${currentMinute}`
-      );
-      return;
-    }
+  const currentMinute =
+    currentMinuteInTz(timezone);
+
+  const today =
+    currentDateInTz(timezone);
+
+  // Already sent today's agenda
+  if (
+    clinic.lastAgendaSentDate ===
+    today
+  ) {
+    return;
+  }
+
+  // Only send around 9:00 AM local clinic time
+  if (
+    currentHour !== 9 ||
+    currentMinute > 1
+  ) {
+    return;
+  }
 
   const {
     todayStart,
@@ -72,12 +93,11 @@ export async function runDailyAgendaJob(
     });
 
   const doctorPhone =
-    clinic.doctorPhone.startsWith(
-      '+'
-    )
+    clinic.doctorPhone.startsWith('+')
       ? clinic.doctorPhone
       : `+91${clinic.doctorPhone}`;
 
+  // No appointments today
   if (
     appointments.length === 0
   ) {
@@ -85,6 +105,15 @@ export async function runDailyAgendaJob(
       doctorPhone,
       `Good morning Doctor. No appointments scheduled for today at ${clinic.name}. Have a great day! Do not reply to this message.`
     );
+
+    await prisma.clinic.update({
+      where: {
+        id: clinicId,
+      },
+      data: {
+        lastAgendaSentDate: today,
+      },
+    });
 
     console.log(
       'No appointments today — agenda SMS sent to doctor ✓'
@@ -111,14 +140,6 @@ export async function runDailyAgendaJob(
       })
       .join('. ');
 
-  console.log('================================');
-  console.log('AGENDA SMS ABOUT TO SEND');
-  console.log('Clinic:', clinic.name);
-  console.log('Timezone:', timezone);
-  console.log('Doctor:', doctorPhone);
-  console.log('Appointments:', appointments.length);
-  console.log('================================');
-
   await sendSMS(
     doctorPhone,
     `Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. Total: ${appointments.length} appointment${
@@ -127,10 +148,16 @@ export async function runDailyAgendaJob(
         : ''
     }. Do not reply to this message.`
   );
-  
-  console.log(
-    'AGENDA SMS SUCCESSFULLY SENT'
-  );
+
+  await prisma.clinic.update({
+    where: {
+      id: clinicId,
+    },
+    data: {
+      lastAgendaSentDate: today,
+    },
+  });
+
   console.log(
     `Daily agenda SMS sent to doctor ✓ — ${appointments.length} appointments`
   );
