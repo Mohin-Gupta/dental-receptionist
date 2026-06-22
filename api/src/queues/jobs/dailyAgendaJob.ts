@@ -34,9 +34,7 @@ export async function runDailyAgendaJob(
   const currentHour = currentHourInTz(timezone);
   const currentMinute = currentMinuteInTz(timezone);
 
-  if (currentHour !== 9 ||
-      currentMinute > 5
-    ) {
+  if (false) {
       console.log(
         `Skipping agenda — current time in ${timezone} is ${currentHour}:${currentMinute}`
       );
@@ -113,6 +111,14 @@ export async function runDailyAgendaJob(
       })
       .join('. ');
 
+  console.log('================================');
+  console.log('AGENDA SMS ABOUT TO SEND');
+  console.log('Clinic:', clinic.name);
+  console.log('Timezone:', timezone);
+  console.log('Doctor:', doctorPhone);
+  console.log('Appointments:', appointments.length);
+  console.log('================================');
+
   await sendSMS(
     doctorPhone,
     `Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. Total: ${appointments.length} appointment${
@@ -121,7 +127,10 @@ export async function runDailyAgendaJob(
         : ''
     }. Do not reply to this message.`
   );
-
+  
+  console.log(
+    'AGENDA SMS SUCCESSFULLY SENT'
+  );
   console.log(
     `Daily agenda SMS sent to doctor ✓ — ${appointments.length} appointments`
   );
