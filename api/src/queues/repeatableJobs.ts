@@ -6,6 +6,14 @@ import { reminderQueue } from './reminderQueue';
  */
 
 export async function scheduleDailyAgenda(): Promise<void> {
+  const jobs =
+    await reminderQueue.getRepeatableJobs();
+
+  console.log(
+    'REPEATABLE JOBS:',
+    jobs
+  );
+
   const existing =
     await reminderQueue.getRepeatableJobs();
 
