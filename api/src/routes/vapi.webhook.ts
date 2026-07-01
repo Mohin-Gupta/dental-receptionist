@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { clearCallState } from '../tools/state';
+import { requireMachineAuth } from '../auth/middleware';
 import {
   checkAvailability,
   validateSlot,
@@ -29,7 +30,7 @@ const TOOL_HANDLERS: Record<
   bookAppointment:       (c, id, p)  => bookAppointment(c, id, p),
 };
 
-router.post('/webhook/vapi', async (req, res) => {
+router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   const event = req.body;
   const type  = event?.message?.type;
 

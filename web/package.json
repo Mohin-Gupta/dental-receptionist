@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.5.2",
     "axios": "^1.17.0",
     "date-fns": "^4.4.0",
     "lucide-react": "^1.18.0",

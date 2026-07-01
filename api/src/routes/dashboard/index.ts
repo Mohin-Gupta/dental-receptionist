@@ -6,6 +6,7 @@ import patientsRoutes from './patients.routes';
 import callsRoutes from './calls.routes';
 import settingsRoutes from './settings.routes';
 import remindersRoutes from './reminders.routes';
+import { requireAuth, requireClinic, requireCsrf } from '../../auth/middleware';
 
 /**
  * dashboard/index.ts — combines every dashboard sub-router into one router,
@@ -17,6 +18,8 @@ import remindersRoutes from './reminders.routes';
  * changed, just where the code physically lives.
  */
 const router = Router();
+
+router.use('/dashboard', requireAuth, requireClinic, requireCsrf);
 
 router.use(statsRoutes);
 router.use(appointmentsRoutes);

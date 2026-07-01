@@ -1,11 +1,71 @@
-import axios from 'axios';
+import axios, { AxiosHeaders } from 'axios';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
   timeout: 10000,
+  withCredentials: true,
 });
 
+let csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null) {
+  csrfToken = token;
+}
+
+export async function refreshCsrfToken(): Promise<string | null> {
+  const response = await api.get<{ csrfToken: string }>('/auth/csrf');
+  csrfToken = response.data.csrfToken;
+  return csrfToken;
+}
+
+api.interceptors.request.use((config) => {
+  const method = config.method?.toUpperCase();
+  if (csrfToken && method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const headers = AxiosHeaders.from(config.headers);
+    headers.set('X-CSRF-Token', csrfToken);
+    config.headers = headers;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      typeof window !== 'undefined' &&
+      error?.response?.status === 401 &&
+      !window.location.pathname.startsWith('/sign-in') &&
+      !window.location.pathname.startsWith('/forgot-password') &&
+      !window.location.pathname.startsWith('/reset-password') &&
+      !window.location.pathname.startsWith('/accept-invite') &&
+      !window.location.pathname.startsWith('/verify-email')
+    ) {
+      window.location.href = '/sign-in';
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default api;
+
+export type AuthRole = 'owner' | 'admin' | 'staff' | 'viewer';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface AuthMembership {
+  clinicId: string;
+  role: AuthRole;
+}
+
+export interface AuthMeResponse {
+  user: AuthUser;
+  activeClinic: AuthMembership & { id: string };
+  memberships: AuthMembership[];
+}
 
 export interface Patient {
   id: string;

@@ -1,21 +1,19 @@
 import { Router } from 'express';
 import { getAuthUrl, handleOAuthCallback } from '../services/googleCalendar';
 import { buildClinicContext } from '../services/clinicInfo';
+import { requireAuth, requireClinic, requireMachineAuth, requirePermission } from '../auth/middleware';
+import { auditAction } from '../auth/audit';
 
 const router = Router();
 
 // Clinic admin visits this URL to connect their Google Calendar
-router.get('/auth/google', (req, res) => {
-  const clinicId = req.query.clinicId as string;
-  if (!clinicId) {
-    res.status(400).json({ error: 'clinicId required' });
-    return;
-  }
+router.get('/auth/google', requireAuth, requireClinic, requirePermission('integrations:manage'), (req, res) => {
+  const clinicId = req.auth!.clinicId;
   const url = getAuthUrl(clinicId);
   res.redirect(url);
 });
 
-router.get('/clinic/context', async (req, res) => {
+router.get('/clinic/context', requireMachineAuth, async (req, res) => {
   const clinicId = process.env.DEFAULT_CLINIC_ID!;
   try {
     const context = await buildClinicContext(clinicId);
@@ -26,12 +24,21 @@ router.get('/clinic/context', async (req, res) => {
 });
 
 // Google redirects here after admin approves
-router.get('/auth/google/callback', async (req, res) => {
+router.get('/auth/google/callback', requireAuth, requireClinic, requirePermission('integrations:manage'), async (req, res) => {
   const code = req.query.code as string;
   const clinicId = req.query.state as string;
 
   try {
+    if (!clinicId || clinicId !== req.auth!.clinicId) {
+      res.status(403).send('Invalid clinic access');
+      return;
+    }
     await handleOAuthCallback(code, clinicId);
+    await auditAction(req, 'integration.google_calendar_connected', {
+      clinicId,
+      targetType: 'Clinic',
+      targetId: clinicId,
+    });
     res.send(`
       <html><body style="font-family:sans-serif;text-align:center;padding:60px">
         <h2>✓ Google Calendar connected!</h2>

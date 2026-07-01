@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
 import { getClinicTimezone } from '../../lib/timezone';
+import { requirePermission } from '../../auth/middleware';
 
 const router = Router();
 
-router.get('/dashboard/calls', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.get('/dashboard/calls', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { page = '1', limit = '20', direction } = req.query as {
     page?: string;
     limit?: string;

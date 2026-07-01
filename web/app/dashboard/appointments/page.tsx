@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 
 import { Appointment } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { Calendar, Plus } from 'lucide-react';
 
 import useAppointments from './hooks/useAppointments';
@@ -18,6 +19,7 @@ import RescheduleModal from './modals/RescheduleModal';
 import CancelModal from './modals/CancelModal';
 
 export default function AppointmentsPage() {
+  const { canWriteAppointments } = useAuth();
   const {
     appointments,
     total,
@@ -58,7 +60,7 @@ export default function AppointmentsPage() {
   );
 
   const showActions =
-    activeTab === 'upcoming';
+    activeTab === 'upcoming' && canWriteAppointments;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -73,15 +75,17 @@ export default function AppointmentsPage() {
           </p>
         </div>
 
-        <button
-          onClick={() =>
-            setShowNewModal(true)
-          }
-          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors w-full sm:w-auto"
-        >
-          <Plus className="w-4 h-4" />
-          New Appointment
-        </button>
+        {canWriteAppointments && (
+          <button
+            onClick={() =>
+              setShowNewModal(true)
+            }
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors w-full sm:w-auto"
+          >
+            <Plus className="w-4 h-4" />
+            New Appointment
+          </button>
+        )}
       </div>
 
       <SuccessAlert

@@ -13,12 +13,14 @@ import {
 import { cancelReminders, scheduleReminders } from '../../queues/reminderQueue';
 import { normalizeTime } from '../../tools/helpers';
 import { sendPatientNotification } from './appointmentNotifications';
+import { requirePermission } from '../../auth/middleware';
+import { auditAction } from '../../auth/audit';
 
 const router = Router();
 
 // ── List — classified by tab (upcoming / past / cancelled) ───────────────────
-router.get('/dashboard/appointments', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.get('/dashboard/appointments', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { tab = 'upcoming', page = '1', limit = '20' } = req.query;
   const now = new Date();
   const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -63,9 +65,9 @@ router.get('/dashboard/appointments', async (req: Request, res: Response) => {
 });
 
 // ── Single appointment ────────────────────────────────────────────────────────
-router.get('/dashboard/appointments/:id', async (req: Request, res: Response) => {
-  const appointment = await prisma.appointment.findUnique({
-    where: { id: req.params.id },
+router.get('/dashboard/appointments/:id', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const appointment = await prisma.appointment.findFirst({
+    where: { id: req.params.id, clinicId: req.auth!.clinicId },
     include: { patient: true, callLogs: true, reminderJobs: true },
   });
   if (!appointment) return res.status(404).json({ error: 'Not found' });
@@ -76,8 +78,8 @@ router.get('/dashboard/appointments/:id', async (req: Request, res: Response) =>
 // Mirrors tools/bookAppointment.ts exactly: find-or-create patient by phone,
 // create Google Calendar event, create Appointment row, send booking
 // confirmation SMS, schedule the 60-min reminder + feedback SMS jobs.
-router.post('/dashboard/appointments', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.post('/dashboard/appointments', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { patientName, patientPhone, date, time, reason } = req.body as {
     patientName: string;
     patientPhone: string;
@@ -166,6 +168,12 @@ router.post('/dashboard/appointments', async (req: Request, res: Response) => {
       console.warn('Reminder scheduling failed (non-fatal):', err?.message);
     }
 
+    await auditAction(req, 'appointment.created', {
+      targetType: 'Appointment',
+      targetId: appointment.id,
+      metadata: { patientId: patient.id, reason },
+    });
+
     res.json({
       success: true,
       appointment,
@@ -178,8 +186,8 @@ router.post('/dashboard/appointments', async (req: Request, res: Response) => {
 });
 
 // ── Reschedule from dashboard ─────────────────────────────────────────────────
-router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { id } = req.params;
   const { newDate, newTime } = req.body as { newDate: string; newTime: string };
 
@@ -187,8 +195,8 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
     return res.status(400).json({ error: 'newDate and newTime are required' });
   }
 
-  const oldAppointment = await prisma.appointment.findUnique({
-    where: { id },
+  const oldAppointment = await prisma.appointment.findFirst({
+    where: { id, clinicId },
     include: { patient: true, clinic: true },
   });
 
@@ -259,6 +267,12 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
     'Reschedule'
   );
 
+  await auditAction(req, 'appointment.rescheduled', {
+    targetType: 'Appointment',
+    targetId: newAppointment.id,
+    metadata: { previousAppointmentId: id },
+  });
+
   res.json({
     success: true,
     appointment: newAppointment,
@@ -267,12 +281,12 @@ router.patch('/dashboard/appointments/:id/reschedule', async (req: Request, res:
 });
 
 // ── Cancel from dashboard ─────────────────────────────────────────────────────
-router.patch('/dashboard/appointments/:id/cancel', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.patch('/dashboard/appointments/:id/cancel', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { id } = req.params;
 
-  const appointment = await prisma.appointment.findUnique({
-    where: { id },
+  const appointment = await prisma.appointment.findFirst({
+    where: { id, clinicId },
     include: { patient: true, clinic: true },
   });
 
@@ -304,6 +318,11 @@ router.patch('/dashboard/appointments/:id/cancel', async (req: Request, res: Res
     `Please call us to rebook. Do not reply to this message.`,
     'Cancellation'
   );
+
+  await auditAction(req, 'appointment.cancelled', {
+    targetType: 'Appointment',
+    targetId: id,
+  });
 
   res.json({ success: true, message: `Appointment cancelled. Patient notified via SMS.` });
 });

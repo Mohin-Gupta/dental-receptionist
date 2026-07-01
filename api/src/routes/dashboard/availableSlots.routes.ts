@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { getAvailableSlots } from '../../services/googleCalendar';
+import { requirePermission } from '../../auth/middleware';
 
 const router = Router();
 
 // Used by the admin "New Appointment" modal to show bookable times for a given
 // date. Reuses the exact same getAvailableSlots logic Maya uses on calls —
 // same business hours, same Google Calendar freebusy check, same 30-min slot grid.
-router.get('/dashboard/available-slots', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.get('/dashboard/available-slots', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { date } = req.query as { date?: string };
 
   if (!date) {

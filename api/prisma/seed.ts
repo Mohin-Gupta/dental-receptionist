@@ -17,10 +17,6 @@ async function main() {
         sat: { open: '10:00', close: '14:00' },
         sun: null,
       },
-      aiPersonality: {
-        greeting: 'Thank you for calling Smile Dental Clinic. This is Maya. How can I help you today?',
-        voice: 'alloy',
-      },
     },
   });
 

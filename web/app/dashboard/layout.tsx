@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { UserButton, useUser } from '@clerk/nextjs';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
 import {
   LayoutDashboard,
   Calendar,
@@ -13,6 +13,7 @@ import {
   Stethoscope,
   Menu,
   X,
+  LogOut,
 } from 'lucide-react';
 
 const navItems = [
@@ -25,19 +26,29 @@ const navItems = [
 
 interface SidebarProps {
   pathname: string;
-  firstName?: string | null;
-  lastName?: string | null;
+  name?: string;
   email?: string;
+  role?: string | null;
+  canManageSettings: boolean;
   closeMenu?: () => void;
+  onLogout: () => void;
 }
 
 function SidebarContent({
   pathname,
-  firstName,
-  lastName,
+  name,
   email,
+  role,
+  canManageSettings,
   closeMenu,
+  onLogout,
 }: SidebarProps) {
+  const visibleNavItems = navItems.filter((item) =>
+    item.href === '/dashboard/settings'
+      ? canManageSettings
+      : true
+  );
+
   return (
     <>
       <div className="px-5 py-5 border-b border-gray-800">
@@ -58,7 +69,7 @@ function SidebarContent({
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isActive = pathname === item.href;
 
@@ -82,17 +93,33 @@ function SidebarContent({
 
       <div className="px-4 py-4 border-t border-gray-800">
         <div className="flex items-center gap-3">
-          <UserButton />
+          <div className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-xs font-semibold text-gray-300">
+            {name?.charAt(0).toUpperCase() ?? 'U'}
+          </div>
 
           <div className="flex-1 min-w-0">
             <p className="text-xs font-medium text-white truncate">
-              {firstName} {lastName}
+              {name}
             </p>
 
             <p className="text-xs text-gray-400 truncate">
               {email}
             </p>
+
+            {role && (
+              <p className="text-[11px] text-gray-500 capitalize">
+                {role}
+              </p>
+            )}
           </div>
+
+          <button
+            onClick={onLogout}
+            className="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+            aria-label="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </>
@@ -105,7 +132,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { user } = useUser();
+  const { user, role, loading, logout, canManageSettings } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   useEffect(() => {
   setMobileOpen(false);
@@ -126,6 +153,14 @@ useEffect(() => {
   };
 }, [mobileOpen]);
 
+  if (loading || !user) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-950">
       {/* Mobile Header */}
@@ -144,7 +179,13 @@ useEffect(() => {
           </span>
         </div>
 
-        <UserButton />
+        <button
+          onClick={logout}
+          className="text-gray-400 hover:text-white"
+          aria-label="Sign out"
+        >
+          <LogOut className="w-5 h-5" />
+        </button>
       </header>
 
       {/* Mobile Overlay */}
@@ -175,10 +216,12 @@ useEffect(() => {
         <div className="h-full flex flex-col">
           <SidebarContent
             pathname={pathname}
-            firstName={user?.firstName}
-            lastName={user?.lastName}
-            email={user?.emailAddresses?.[0]?.emailAddress}
+            name={user.name}
+            email={user.email}
+            role={role}
+            canManageSettings={canManageSettings}
             closeMenu={() => setMobileOpen(false)}
+            onLogout={logout}
           />
         </div>
       </aside>
@@ -187,9 +230,11 @@ useEffect(() => {
       <aside className="hidden md:flex fixed left-0 top-0 h-screen w-64 bg-gray-900 border-r border-gray-800 flex-col">
         <SidebarContent
           pathname={pathname}
-          firstName={user?.firstName}
-          lastName={user?.lastName}
-          email={user?.emailAddresses?.[0]?.emailAddress}
+          name={user.name}
+          email={user.email}
+          role={role}
+          canManageSettings={canManageSettings}
+          onLogout={logout}
         />
       </aside>
 

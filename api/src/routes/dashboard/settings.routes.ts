@@ -1,18 +1,20 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
+import { auditAction } from '../../auth/audit';
+import { requirePermission } from '../../auth/middleware';
 
 const router = Router();
 
-router.get('/dashboard/settings', async (_req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.get('/dashboard/settings', requirePermission('settings:read'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
   if (!clinic) return res.status(404).json({ error: 'Clinic not found' });
   const { googleTokens: _tokens, ...safe } = clinic as typeof clinic & { googleTokens?: string };
   res.json(safe);
 });
 
-router.patch('/dashboard/settings', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.patch('/dashboard/settings', requirePermission('settings:write'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const body = req.body as {
     name?: string;
     timezone?: string;
@@ -49,6 +51,10 @@ router.patch('/dashboard/settings', async (req: Request, res: Response) => {
   });
 
   const { googleTokens: _tokens, ...safe } = updated as typeof updated & { googleTokens?: string };
+  await auditAction(req, 'settings.updated', {
+    targetType: 'Clinic',
+    targetId: clinicId,
+  });
   res.json(safe);
 });
 

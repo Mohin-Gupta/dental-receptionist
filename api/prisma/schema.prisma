@@ -37,8 +37,162 @@ model Clinic {
   patients     Patient[]
   appointments Appointment[]
   callLogs     CallLog[]
+  memberships  ClinicMembership[]
+  inviteTokens InviteToken[]
+  auditLogs    AuditLog[]
+  securityEvents SecurityEvent[]
   // escalations  Escalation[]
   // callbacks    Callback[]
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  name            String
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  status          String    @default("active")
+  mfaRequired     Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  memberships             ClinicMembership[]
+  sessions                Session[]
+  createdInvites          InviteToken[]            @relation("InviteCreatedBy")
+  acceptedInvites         InviteToken[]            @relation("InviteAcceptedBy")
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  mfaMethods              MfaMethod[]
+  auditLogs               AuditLog[]
+  securityEvents          SecurityEvent[]
+}
+
+model ClinicMembership {
+  id        String   @id @default(uuid())
+  userId    String
+  clinicId  String
+  role      String   @default("staff")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clinicId])
+  @@index([clinicId, role])
+}
+
+model Session {
+  id            String    @id @default(uuid())
+  userId        String
+  tokenHash     String    @unique
+  csrfTokenHash String?
+  expiresAt     DateTime
+  lastSeenAt    DateTime  @default(now())
+  revokedAt     DateTime?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model InviteToken {
+  id           String    @id @default(uuid())
+  clinicId     String
+  email        String
+  role         String
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  createdById  String?
+  acceptedById String?
+  createdAt    DateTime  @default(now())
+
+  clinic     Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  createdBy  User?  @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedBy User?  @relation("InviteAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, email])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model MfaMethod {
+  id            String    @id @default(uuid())
+  userId        String
+  type          String
+  secret        String?
+  recoveryCodes Json?
+  enabledAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  clinicId   String?
+  action     String
+  targetType String?
+  targetId   String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model SecurityEvent {
+  id        String   @id @default(uuid())
+  userId    String?
+  clinicId  String?
+  type      String
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
 }
 
 model Patient {

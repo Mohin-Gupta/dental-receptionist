@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
+import { requirePermission } from '../../auth/middleware';
 
 const router = Router();
 
-router.get('/dashboard/patients', async (req: Request, res: Response) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
+router.get('/dashboard/patients', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const clinicId = req.auth!.clinicId;
   const { search, page = '1', limit = '20' } = req.query;
 
   type PatientWhere = {
