@@ -4,6 +4,7 @@ import { runStatusUpdaterJob } from './jobs/statusUpdaterJob';
 import { runDailyAgendaJob } from './jobs/dailyAgendaJob';
 import { runSixtyMinReminderJob } from './jobs/sixtyMinReminderJob';
 import { runFeedbackSmsJob } from './jobs/feedbackSmsJob';
+import { prisma } from '../lib/prisma';
 
 /**
  * reminderWorker.ts — thin dispatcher only. All actual job logic lives in
@@ -24,7 +25,17 @@ export const reminderWorker = new Worker(
         break;
 
       case 'agenda':
-        await runDailyAgendaJob(job.data.clinicId);
+        if (job.data.clinicId) {
+          await runDailyAgendaJob(job.data.clinicId);
+        } else if (job.data.organizationId) {
+          const clinics = await prisma.clinic.findMany({
+            where: { organizationId: job.data.organizationId },
+            select: { id: true },
+          });
+          for (const clinic of clinics) {
+            await runDailyAgendaJob(clinic.id);
+          }
+        }
         break;
 
       case '60min':

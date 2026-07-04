@@ -7,9 +7,16 @@ const api = axios.create({
 });
 
 let csrfToken: string | null = null;
+let activeOrganizationId: string | null = null;
+let activeClinicId: string | null = null;
 
 export function setCsrfToken(token: string | null) {
   csrfToken = token;
+}
+
+export function setAuthScope(organizationId: string | null, clinicId: string | null) {
+  activeOrganizationId = organizationId;
+  activeClinicId = clinicId;
 }
 
 export async function refreshCsrfToken(): Promise<string | null> {
@@ -20,11 +27,13 @@ export async function refreshCsrfToken(): Promise<string | null> {
 
 api.interceptors.request.use((config) => {
   const method = config.method?.toUpperCase();
+  const headers = AxiosHeaders.from(config.headers);
+  if (activeOrganizationId) headers.set('X-Organization-Id', activeOrganizationId);
+  if (activeClinicId) headers.set('X-Clinic-Id', activeClinicId);
   if (csrfToken && method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    const headers = AxiosHeaders.from(config.headers);
     headers.set('X-CSRF-Token', csrfToken);
-    config.headers = headers;
   }
+  config.headers = headers;
   return config;
 });
 
@@ -61,9 +70,33 @@ export interface AuthMembership {
   role: AuthRole;
 }
 
+export interface AuthOrganization {
+  id: string;
+  name: string;
+  role: AuthRole | null;
+}
+
+export interface AuthClinic {
+  id: string;
+  organizationId: string;
+  name: string;
+  role: AuthRole | null;
+}
+
 export interface AuthMeResponse {
   user: AuthUser;
-  activeClinic: AuthMembership & { id: string };
+  activeOrganization: {
+    id: string;
+    role: AuthRole | null;
+  };
+  activeClinic: {
+    id: string;
+    organizationId: string;
+    role: AuthRole;
+    clinicRole: AuthRole | null;
+  };
+  organizations: AuthOrganization[];
+  clinics: AuthClinic[];
   memberships: AuthMembership[];
 }
 
@@ -77,6 +110,7 @@ export interface Patient {
 
 export interface Appointment {
   id: string;
+  doctorId: string;
   reason: string;
   startAt: string;
   endAt: string;
@@ -84,6 +118,7 @@ export interface Appointment {
   confirmed: boolean;
   createdAt: string;
   patient: Patient;
+  doctor?: Doctor;
 }
 
 export interface CallLog {
@@ -159,25 +194,54 @@ export interface BookResponse {
 }
 
 export interface ClinicSettings {
+  organization: OrganizationSettings;
+  clinic: BranchSettings;
+  doctors: Doctor[];
+}
+
+export interface OrganizationSettings {
   id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  about: string | null;
+  services: string[] | null;
+  planTier: string;
+  createdAt: string;
+}
+
+export interface BranchSettings {
+  id: string;
+  organizationId: string;
   name: string;
   phone: string;
   timezone: string;
   googleCalendarId: string | null;
   businessHours: Record<string, { open: string; close: string } | null>;
-  aiPersonality: Record<string, string>;
-  planTier: string;
-  doctorName: string | null;
-  doctorPhone: string | null;
-  doctorQualification: string | null;
-  doctorYOE: number | null;
-  doctorSpecialty: string | null;
   clinicAddress: string | null;
   clinicEmail: string | null;
   clinicWebsite: string | null;
   clinicAbout: string | null;
   clinicServices: string[] | null;
   createdAt: string;
+}
+
+export interface Doctor {
+  id: string;
+  organizationId: string;
+  userId: string | null;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  qualification: string | null;
+  yearsExperience: number | null;
+  specialty: string | null;
+  status: string;
+}
+
+export interface DoctorsResponse {
+  doctors: Doctor[];
 }
 
 export interface PaginatedResponse<T> {

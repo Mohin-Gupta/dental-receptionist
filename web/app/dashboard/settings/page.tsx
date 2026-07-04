@@ -3,6 +3,7 @@
 import useSettings from './hooks/useSettings';
 
 import SaveButton from './components/SaveButton';
+import OrganizationInfoSection from './components/OrganizationInfoSection';
 import ClinicInfoSection from './components/ClinicInfoSection';
 import DoctorInfoSection from './components/DoctorInfoSection';
 import BusinessHoursSection from './components/BusinessHoursSection';
@@ -15,7 +16,11 @@ export default function SettingsPage() {
     saving,
     saved,
 
-    update,
+    canEditOrganization,
+    canManageDoctors,
+    updateBranch,
+    updateOrganization,
+    refreshSettings,
     handleSave,
   } = useSettings();
 
@@ -36,7 +41,7 @@ export default function SettingsPage() {
           </h1>
 
           <p className="text-sm text-gray-400 mt-1">
-            Manage clinic and doctor information
+            Manage organization, branch, and doctor information
           </p>
         </div>
 
@@ -48,19 +53,26 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-5">
+        <OrganizationInfoSection
+          form={form.organization}
+          canEdit={canEditOrganization}
+          update={updateOrganization}
+        />
+
         <ClinicInfoSection
-          form={form}
-          update={update}
+          form={form.clinic}
+          update={updateBranch}
         />
 
         <DoctorInfoSection
-          form={form}
-          update={update}
+          doctors={form.doctors}
+          canManage={canManageDoctors}
+          onRefresh={refreshSettings}
         />
 
         <BusinessHoursSection
-          form={form}
-          update={update}
+          form={form.clinic}
+          update={updateBranch}
         />
       </div>
     </div>

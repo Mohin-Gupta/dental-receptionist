@@ -1,9 +1,10 @@
 import type { NextFunction, Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { SESSION_COOKIE_NAME } from './config';
+import { AuthSelectionError, buildAuthContextForUser } from './context';
 import { hashToken, safeTokenEqual } from './crypto';
-import { hasPermission, isAuthRole } from './permissions';
-import type { AuthMembership, Permission } from './types';
+import { hasPermission } from './permissions';
+import type { Permission } from './types';
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const rawToken = req.cookies?.[SESSION_COOKIE_NAME];
@@ -14,49 +15,29 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const tokenHash = hashToken(rawToken);
   const session = await prisma.session.findUnique({
     where: { tokenHash },
-    include: {
-      user: {
-        include: {
-          memberships: {
-            include: { clinic: true },
-            orderBy: { createdAt: 'asc' },
-          },
-        },
-      },
-    },
   });
 
   if (
     !session ||
     session.revokedAt ||
-    session.expiresAt <= new Date() ||
-    session.user.status !== 'active'
+    session.expiresAt <= new Date()
   ) {
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  const memberships: AuthMembership[] = session.user.memberships
-    .filter((m) => isAuthRole(m.role))
-    .map((m) => ({ clinicId: m.clinicId, role: m.role as AuthMembership['role'] }));
-
-  if (memberships.length === 0) {
-    return res.status(403).json({ error: 'No clinic access' });
+  try {
+    req.auth = await buildAuthContextForUser(
+      session.userId,
+      session.id,
+      req.header('x-organization-id') ?? undefined,
+      req.header('x-clinic-id') ?? undefined
+    );
+  } catch (err) {
+    if (err instanceof AuthSelectionError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
   }
-
-  const requestedClinicId = req.header('x-clinic-id');
-  const selected =
-    (requestedClinicId && memberships.find((m) => m.clinicId === requestedClinicId)) ||
-    memberships[0];
-
-  req.auth = {
-    userId: session.user.id,
-    email: session.user.email,
-    name: session.user.name,
-    role: selected.role,
-    clinicId: selected.clinicId,
-    memberships,
-    sessionId: session.id,
-  };
 
   prisma.session
     .update({ where: { id: session.id }, data: { lastSeenAt: new Date() } })

@@ -11,8 +11,8 @@ export async function cancelAppointment(
 
   if (!appointmentId) return 'No appointment ID provided. Ask patient to confirm which appointment.';
 
-  const appointment = await prisma.appointment.findUnique({
-    where: { id: appointmentId },
+  const appointment = await prisma.appointment.findFirst({
+    where: { id: appointmentId, clinicId },
     include: { patient: true },
   });
 
@@ -20,7 +20,7 @@ export async function cancelAppointment(
 
   if (appointment.googleEventId) {
     try {
-      await deleteCalendarEvent(clinicId, appointment.googleEventId);
+      await deleteCalendarEvent(clinicId, appointment.googleEventId, appointment.doctorId);
     } catch (err: any) {
       console.warn('Calendar delete failed (continuing):', err?.message);
     }

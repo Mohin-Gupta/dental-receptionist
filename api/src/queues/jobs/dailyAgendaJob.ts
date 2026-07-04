@@ -24,11 +24,14 @@ export async function runDailyAgendaJob(
   const clinic =
     await prisma.clinic.findUnique({
       where: { id: clinicId },
+      include: {
+        doctors: { include: { doctor: true } },
+      },
     });
 
-  if (!clinic?.doctorPhone) {
+  if (!clinic) {
     console.log(
-      'No doctor phone — skipping agenda'
+      'Clinic not found — skipping agenda'
     );
     return;
   }
@@ -69,62 +72,58 @@ export async function runDailyAgendaJob(
     timezone
   );
 
-  const appointments =
-    await prisma.appointment.findMany({
-      where: {
-        clinicId,
-        status: {
-          in: [
-            'scheduled',
-            'confirmed',
-          ],
-        },
-        startAt: {
-          gte: todayStart,
-          lt: todayEnd,
-        },
-      },
-      include: {
-        patient: true,
-      },
-      orderBy: {
-        startAt: 'asc',
-      },
-    });
-
-  const doctorPhone =
-    clinic.doctorPhone.startsWith('+')
-      ? clinic.doctorPhone
-      : `+91${clinic.doctorPhone}`;
-
-  // No appointments today
-  if (
-    appointments.length === 0
-  ) {
-    await sendSMS(
-      doctorPhone,
-      `Good morning Doctor. No appointments scheduled for today at ${clinic.name}. Have a great day! Do not reply to this message.`
-    );
-
-    await prisma.clinic.update({
-      where: {
-        id: clinicId,
-      },
-      data: {
-        lastAgendaSentDate: today,
-      },
-    });
-
-    console.log(
-      'No appointments today — agenda SMS sent to doctor ✓'
-    );
-
+  const doctors = clinic.doctors.map((entry) => entry.doctor).filter((doctor) => doctor.status === 'active');
+  if (doctors.length === 0) {
+    console.log('No active doctors assigned — skipping agenda');
     return;
   }
 
-  const agendaList =
-    appointments
-      .map((a, i) => {
+  for (const doctor of doctors) {
+    if (!doctor.phone) {
+      console.log(`No phone for ${doctor.name} — skipping agenda`);
+      continue;
+    }
+
+    const appointments =
+      await prisma.appointment.findMany({
+        where: {
+          clinicId,
+          doctorId: doctor.id,
+          status: {
+            in: [
+              'scheduled',
+              'confirmed',
+            ],
+          },
+          startAt: {
+            gte: todayStart,
+            lt: todayEnd,
+          },
+        },
+        include: {
+          patient: true,
+        },
+        orderBy: {
+          startAt: 'asc',
+        },
+      });
+
+    const doctorPhone =
+      doctor.phone.startsWith('+')
+        ? doctor.phone
+        : `+91${doctor.phone}`;
+
+    if (appointments.length === 0) {
+      await sendSMS(
+        doctorPhone,
+        `Good morning ${doctor.name}. No appointments scheduled for today at ${clinic.name}. Have a great day! Do not reply to this message.`
+      );
+      continue;
+    }
+
+    const agendaList =
+      appointments
+        .map((a, i) => {
         const {
           readableTime,
         } = formatInTimezone(
@@ -137,17 +136,18 @@ export async function runDailyAgendaJob(
         } at ${readableTime} — ${
           a.reason
         }`;
-      })
-      .join('. ');
+        })
+        .join('. ');
 
-  await sendSMS(
-    doctorPhone,
-    `Good morning Doctor. Today's schedule at ${clinic.name}: ${agendaList}. Total: ${appointments.length} appointment${
-      appointments.length > 1
-        ? 's'
-        : ''
-    }. Do not reply to this message.`
-  );
+    await sendSMS(
+      doctorPhone,
+      `Good morning ${doctor.name}. Today's schedule at ${clinic.name}: ${agendaList}. Total: ${appointments.length} appointment${
+        appointments.length > 1
+          ? 's'
+          : ''
+      }. Do not reply to this message.`
+    );
+  }
 
   await prisma.clinic.update({
     where: {
@@ -159,6 +159,6 @@ export async function runDailyAgendaJob(
   });
 
   console.log(
-    `Daily agenda SMS sent to doctor ✓ — ${appointments.length} appointments`
+    `Daily agenda processed for ${doctors.length} doctor(s)`
   );
 }

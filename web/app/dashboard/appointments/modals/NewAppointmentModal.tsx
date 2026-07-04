@@ -6,6 +6,8 @@ import api, {
   BookResponse,
   AvailableSlot,
   AvailableSlotsResponse,
+  Doctor,
+  DoctorsResponse,
 } from '@/lib/api';
 
 import {
@@ -25,6 +27,12 @@ export default function NewAppointmentModal({ onClose, onSuccess }: NewAppointme
   const [patientPhone, setPatientPhone] = useState('');
   const [reason, setReason] = useState('');
   const [date, setDate] = useState('');
+  const [doctors, setDoctors] =
+    useState<Doctor[]>([]);
+  const [
+    selectedDoctorId,
+    setSelectedDoctorId,
+  ] = useState('');
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 
   const [slots, setSlots] = useState<AvailableSlot[]>([]);
@@ -48,9 +56,35 @@ export default function NewAppointmentModal({ onClose, onSuccess }: NewAppointme
 
 const { minDate, maxDate } = dateLimits;
 
+  useEffect(() => {
+    api
+      .get<DoctorsResponse>(
+        '/dashboard/doctors'
+      )
+      .then((response) => {
+        setDoctors(
+          response.data.doctors
+        );
+
+        const firstDoctor =
+          response.data.doctors[0];
+
+        if (firstDoctor) {
+          setSelectedDoctorId(
+            firstDoctor.id
+          );
+        }
+      })
+      .catch(() =>
+        setError(
+          'Failed to load doctors.'
+        )
+      );
+  }, []);
+
   // Fetch available slots whenever the date changes — same logic Maya uses on calls
   useEffect(() => {
-    if (!date) {
+    if (!date || !selectedDoctorId) {
       setSlots([]);
       setSelectedSlot(null);
       return;
@@ -60,15 +94,15 @@ const { minDate, maxDate } = dateLimits;
     setSlotsError('');
     setSelectedSlot(null);
 
-    api.get<AvailableSlotsResponse>('/dashboard/available-slots', { params: { date } })
+    api.get<AvailableSlotsResponse>('/dashboard/available-slots', { params: { date, doctorId: selectedDoctorId } })
       .then(r => setSlots(r.data.slots))
       .catch(() => setSlotsError('Failed to load available slots for this date.'))
       .finally(() => setSlotsLoading(false));
-  }, [date]);
+  }, [date, selectedDoctorId]);
 
   const handleSubmit = async () => {
-    if (!patientName.trim() || !patientPhone.trim() || !reason.trim() || !date || !selectedSlot) {
-      setError('Please fill in all fields and select a time slot.');
+    if (!patientName.trim() || !patientPhone.trim() || !reason.trim() || !date || !selectedDoctorId || !selectedSlot) {
+      setError('Please fill in all fields and select a doctor and time slot.');
       return;
     }
 
@@ -79,6 +113,7 @@ const { minDate, maxDate } = dateLimits;
       const res = await api.post<BookResponse>('/dashboard/appointments', {
         patientName: patientName.trim(),
         patientPhone: patientPhone.trim(),
+        doctorId: selectedDoctorId,
         date,
         time: selectedSlot,
         reason: reason.trim(),
@@ -149,6 +184,25 @@ const { minDate, maxDate } = dateLimits;
           </div>
 
           <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5">Doctor</label>
+            <select
+              value={selectedDoctorId}
+              onChange={e => setSelectedDoctorId(e.target.value)}
+              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {doctors.length === 0 ? (
+                <option value="">No doctors available</option>
+              ) : (
+                doctors.map((doctor) => (
+                  <option key={doctor.id} value={doctor.id}>
+                    {doctor.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          <div>
             <label className="block text-xs font-medium text-gray-400 mb-1.5">Date</label>
             <input
               type="date"
@@ -216,7 +270,11 @@ const { minDate, maxDate } = dateLimits;
           </button>
           <button
             onClick={handleSubmit}
-            disabled={submitting || !selectedSlot}
+            disabled={
+              submitting ||
+              !selectedDoctorId ||
+              !selectedSlot
+            }
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting

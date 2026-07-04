@@ -6,6 +6,7 @@ import { requirePermission } from '../../auth/middleware';
 const router = Router();
 
 router.get('/dashboard/stats', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
 
   const timezone = await getClinicTimezone(clinicId);
@@ -38,7 +39,7 @@ router.get('/dashboard/stats', requirePermission('dashboard:read'), async (req: 
     prisma.appointment.count({
       where: { clinicId, status: 'cancelled' },
     }),
-    prisma.patient.count({ where: { clinicId } }),
+    prisma.patient.count({ where: { organizationId } }),
     prisma.callLog.count({
       where: { clinicId, createdAt: { gte: todayStart, lt: todayEnd } },
     }),

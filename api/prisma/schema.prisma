@@ -9,23 +9,15 @@ datasource db {
 
 model Clinic {
   id               String   @id @default(uuid())
+  organizationId   String
   name             String
-  phone            String   @unique
+  phone            String
   timezone         String   @default("UTC")
   googleCalendarId String?
   googleTokens     String?
   businessHours    Json
-  // aiPersonality    Json
-  planTier         String   @default("starter")
   lastAgendaSentDate String?
-  // Doctor information
-  doctorName        String?
-  doctorPhone       String?
-  doctorQualification String?
-  doctorYOE         Int?
-  doctorSpecialty   String?
 
-  // Clinic information
   clinicAddress     String?
   clinicEmail       String?
   clinicWebsite     String?
@@ -33,7 +25,9 @@ model Clinic {
   clinicAbout       String? // short description
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   patients     Patient[]
   appointments Appointment[]
   callLogs     CallLog[]
@@ -41,8 +35,38 @@ model Clinic {
   inviteTokens InviteToken[]
   auditLogs    AuditLog[]
   securityEvents SecurityEvent[]
+  doctors      DoctorClinic[]
+  doctorAvailabilities DoctorAvailability[]
+  calendarConnections CalendarConnection[]
   // escalations  Escalation[]
   // callbacks    Callback[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId])
+}
+
+model Organization {
+  id             String   @id @default(uuid())
+  name           String
+  phone          String?
+  email          String?
+  website        String?
+  about          String?
+  services       Json?
+  planTier       String   @default("starter")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  clinics        Clinic[]
+  patients       Patient[]
+  appointments   Appointment[]
+  callLogs       CallLog[]
+  memberships    OrganizationMembership[]
+  doctors        Doctor[]
+  inviteTokens   InviteToken[]
+  auditLogs      AuditLog[]
+  securityEvents SecurityEvent[]
+  calendarConnections CalendarConnection[]
 }
 
 model User {
@@ -58,14 +82,31 @@ model User {
   updatedAt       DateTime  @updatedAt
 
   memberships             ClinicMembership[]
+  organizationMemberships OrganizationMembership[]
   sessions                Session[]
   createdInvites          InviteToken[]            @relation("InviteCreatedBy")
   acceptedInvites         InviteToken[]            @relation("InviteAcceptedBy")
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   mfaMethods              MfaMethod[]
+  doctorProfiles          Doctor[]
   auditLogs               AuditLog[]
   securityEvents          SecurityEvent[]
+}
+
+model OrganizationMembership {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  role           String   @default("viewer")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, role])
 }
 
 model ClinicMembership {
@@ -102,9 +143,12 @@ model Session {
 
 model InviteToken {
   id           String    @id @default(uuid())
-  clinicId     String
+  organizationId String
+  clinicId     String?
   email        String
-  role         String
+  role         String    @default("staff")
+  organizationRole String?
+  clinicRole   String?
   tokenHash    String    @unique
   expiresAt    DateTime
   acceptedAt   DateTime?
@@ -112,11 +156,86 @@ model InviteToken {
   acceptedById String?
   createdAt    DateTime  @default(now())
 
-  clinic     Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic     Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   createdBy  User?  @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   acceptedBy User?  @relation("InviteAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
 
+  @@index([organizationId, email])
   @@index([clinicId, email])
+}
+
+model Doctor {
+  id              String   @id @default(uuid())
+  organizationId  String
+  userId          String?  @unique
+  name            String
+  phone           String?
+  email           String?
+  qualification   String?
+  yearsExperience Int?
+  specialty       String?
+  status          String   @default("active")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clinics      DoctorClinic[]
+  availabilities DoctorAvailability[]
+  appointments Appointment[]
+  calendarConnections CalendarConnection[]
+
+  @@index([organizationId, status])
+}
+
+model DoctorClinic {
+  id        String   @id @default(uuid())
+  doctorId  String
+  clinicId  String
+  createdAt DateTime @default(now())
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, clinicId])
+  @@index([clinicId])
+}
+
+model DoctorAvailability {
+  id        String   @id @default(uuid())
+  doctorId  String
+  clinicId  String?
+  dayOfWeek Int
+  open      String
+  close     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId, clinicId, dayOfWeek])
+}
+
+model CalendarConnection {
+  id             String   @id @default(uuid())
+  organizationId String
+  clinicId       String?
+  doctorId       String?
+  scope          String
+  googleCalendarId String?
+  googleTokens   String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor       Doctor?      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, scope])
+  @@index([clinicId])
+  @@index([doctorId])
 }
 
 model EmailVerificationToken {
@@ -162,6 +281,7 @@ model MfaMethod {
 model AuditLog {
   id         String   @id @default(uuid())
   userId     String?
+  organizationId String?
   clinicId   String?
   action     String
   targetType String?
@@ -172,8 +292,10 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
 
+  @@index([organizationId, createdAt])
   @@index([clinicId, createdAt])
   @@index([userId, createdAt])
 }
@@ -181,6 +303,7 @@ model AuditLog {
 model SecurityEvent {
   id        String   @id @default(uuid())
   userId    String?
+  organizationId String?
   clinicId  String?
   type      String
   ipAddress String?
@@ -189,6 +312,7 @@ model SecurityEvent {
   createdAt DateTime @default(now())
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
 
   @@index([type, createdAt])
@@ -197,22 +321,27 @@ model SecurityEvent {
 
 model Patient {
   id        String   @id @default(uuid())
+  organizationId String
   clinicId  String
   name      String
   phone     String
   email     String?
   createdAt DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments Appointment[]
   callLogs     CallLog[]
 
-  @@unique([clinicId, phone])
+  @@unique([organizationId, phone])
+  @@index([clinicId])
 }
 
 model Appointment {
   id            String   @id @default(uuid())
+  organizationId String
   clinicId      String
+  doctorId      String
   patientId     String
   reason        String
   startAt       DateTime
@@ -222,18 +351,23 @@ model Appointment {
   // confirmed     Boolean  @default(false)
   createdAt     DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor       Doctor        @relation(fields: [doctorId], references: [id])
   patient      Patient       @relation(fields: [patientId], references: [id])
   callLogs     CallLog[]
   reminderJobs ReminderJob[]
   // callbacks    Callback[]
 
+  @@index([organizationId, startAt])
   @@index([clinicId, startAt])
+  @@index([doctorId, startAt])
 }
 
 model CallLog {
   id              String   @id @default(uuid())
   phoneNumber     String?
+  organizationId  String
   clinicId        String
   patientId       String?
   appointmentId   String?
@@ -245,6 +379,7 @@ model CallLog {
   outcome         String?
   createdAt       DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient     Patient?     @relation(fields: [patientId], references: [id])
   appointment Appointment? @relation(fields: [appointmentId], references: [id])

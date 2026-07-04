@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react';
 
 import api, {
+  BranchSettings,
   ClinicSettings,
+  OrganizationSettings,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 export default function useSettings() {
+  const {
+    activeOrganizationId,
+    activeClinicId,
+    canManageSettings,
+    role,
+  } = useAuth();
+
   const [form, setForm] =
     useState<ClinicSettings | null>(
       null
@@ -19,31 +29,61 @@ export default function useSettings() {
   const [saved, setSaved] =
     useState(false);
 
-  useEffect(() => {
-    api
-      .get<ClinicSettings>(
-        '/dashboard/settings'
-      )
-      .then((response) => {
-        setForm(response.data);
-      })
-      .catch(console.error)
-      .finally(() =>
-        setLoading(false)
-      );
-  }, []);
+  const loadSettings =
+    async () => {
+      setLoading(true);
 
-  const update = <
-    K extends keyof ClinicSettings
+      try {
+        const response =
+          await api.get<ClinicSettings>(
+            '/dashboard/settings'
+          );
+
+        setForm(response.data);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+  useEffect(() => {
+    void loadSettings();
+  }, [activeOrganizationId, activeClinicId]);
+
+  const updateBranch = <
+    K extends keyof BranchSettings
   >(
     key: K,
-    value: ClinicSettings[K]
+    value: BranchSettings[K]
   ) => {
     setForm((prev) =>
       prev
         ? {
             ...prev,
-            [key]: value,
+            clinic: {
+              ...prev.clinic,
+              [key]: value,
+            },
+          }
+        : prev
+    );
+  };
+
+  const updateOrganization = <
+    K extends keyof OrganizationSettings
+  >(
+    key: K,
+    value: OrganizationSettings[K]
+  ) => {
+    setForm((prev) =>
+      prev
+        ? {
+            ...prev,
+            organization: {
+              ...prev.organization,
+              [key]: value,
+            },
           }
         : prev
     );
@@ -58,7 +98,15 @@ export default function useSettings() {
       try {
         await api.patch(
           '/dashboard/settings',
-          form
+          role === 'owner'
+            ? {
+                organization:
+                  form.organization,
+                clinic: form.clinic,
+              }
+            : {
+                clinic: form.clinic,
+              }
         );
 
         setSaved(true);
@@ -82,7 +130,13 @@ export default function useSettings() {
     saving,
     saved,
 
-    update,
+    canEditOrganization:
+      role === 'owner',
+    canManageDoctors:
+      canManageSettings,
+    updateBranch,
+    updateOrganization,
+    refreshSettings: loadSettings,
     handleSave,
   };
 }

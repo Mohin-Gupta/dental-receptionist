@@ -3,6 +3,7 @@ import { deleteCalendarEvent, createCalendarEvent } from '../services/googleCale
 import { toClinicTimeString, addMinutesToClinicString, formatInTimezone, getClinicTimezone } from '../lib/timezone';
 import { normalizeTime, toReadableTime, toReadableDate } from './helpers';
 import { cancelReminders, scheduleReminders } from '../queues/reminderQueue';
+import { resolveDoctorForClinic } from '../services/doctors';
 
 export async function rescheduleAppointment(
   clinicId: string,
@@ -42,9 +43,9 @@ export async function rescheduleAppointment(
     return 'Could not parse the new date or time. Please ask patient to confirm the new slot.';
   }
 
-  const oldAppointment = await prisma.appointment.findUnique({
-    where: { id: cleanId },
-    include: { patient: true },
+  const oldAppointment = await prisma.appointment.findFirst({
+    where: { id: cleanId, clinicId },
+    include: { patient: true, clinic: true },
   });
 
   console.log('Found appointment:', oldAppointment ? 'yes' : 'no');
@@ -74,10 +75,16 @@ export async function rescheduleAppointment(
     }
   }
 
+  const doctor = await resolveDoctorForClinic(
+    oldAppointment.organizationId,
+    clinicId,
+    parameters.doctorId ?? oldAppointment.doctorId
+  );
+
   // Delete old calendar event
   if (oldAppointment.googleEventId) {
     try {
-      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId);
+      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId, oldAppointment.doctorId);
       console.log('Old calendar event deleted ✓');
     } catch (err: any) {
       console.warn('Calendar delete failed (non-fatal):', err?.message);
@@ -93,6 +100,7 @@ export async function rescheduleAppointment(
   let googleEventId = '';
   try {
     googleEventId = await createCalendarEvent(clinicId, {
+      doctorId:     doctor.id,
       patientName:  oldAppointment.patient.name,
       patientPhone: oldAppointment.patient.phone,
       reason:       oldAppointment.reason,
@@ -107,7 +115,9 @@ export async function rescheduleAppointment(
   // Create new appointment in DB
   const newAppointment = await prisma.appointment.create({
     data: {
+      organizationId: oldAppointment.organizationId,
       clinicId,
+      doctorId:     doctor.id,
       patientId:    oldAppointment.patientId,
       reason:       oldAppointment.reason,
       startAt:      startAtDate,

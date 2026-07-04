@@ -10,6 +10,7 @@ import {
   deleteCalendarEvent,
   createCalendarEvent,
 } from '../../services/googleCalendar';
+import { resolveDoctorForClinic } from '../../services/doctors';
 import { cancelReminders, scheduleReminders } from '../../queues/reminderQueue';
 import { normalizeTime } from '../../tools/helpers';
 import { sendPatientNotification } from './appointmentNotifications';
@@ -20,38 +21,41 @@ const router = Router();
 
 // ── List — classified by tab (upcoming / past / cancelled) ───────────────────
 router.get('/dashboard/appointments', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
   const { tab = 'upcoming', page = '1', limit = '20' } = req.query;
   const now = new Date();
   const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
 
   type WhereClause = {
+    organizationId: string;
     clinicId: string;
     startAt?: { gte?: Date; lt?: Date };
     endAt?: { lt?: Date };
     status?: string | { in: string[] };
   };
 
-  let where: WhereClause = { clinicId };
+  let where: WhereClause = { organizationId, clinicId };
 
   if (tab === 'upcoming') {
-    where = { clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } };
+    where = { organizationId, clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } };
   } else if (tab === 'past') {
     // Classified by endAt time, not the 'completed' status flag — independent
     // of whether the hourly status-updater cron job has run yet.
     where = {
+      organizationId,
       clinicId,
       endAt: { lt: now },
       status: { in: ['scheduled', 'confirmed', 'completed'] },
     };
   } else if (tab === 'cancelled') {
-    where = { clinicId, status: 'cancelled' };
+    where = { organizationId, clinicId, status: 'cancelled' };
   }
 
   const [appointments, total] = await Promise.all([
     prisma.appointment.findMany({
       where,
-      include: { patient: true },
+      include: { patient: true, doctor: true, clinic: true },
       orderBy: tab === 'upcoming' ? { startAt: 'asc' } : { startAt: 'desc' },
       skip,
       take: parseInt(limit as string),
@@ -67,8 +71,8 @@ router.get('/dashboard/appointments', requirePermission('dashboard:read'), async
 // ── Single appointment ────────────────────────────────────────────────────────
 router.get('/dashboard/appointments/:id', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
   const appointment = await prisma.appointment.findFirst({
-    where: { id: req.params.id, clinicId: req.auth!.clinicId },
-    include: { patient: true, callLogs: true, reminderJobs: true },
+    where: { id: req.params.id, organizationId: req.auth!.organizationId, clinicId: req.auth!.clinicId },
+    include: { patient: true, doctor: true, clinic: true, callLogs: true, reminderJobs: true },
   });
   if (!appointment) return res.status(404).json({ error: 'Not found' });
   res.json(appointment);
@@ -79,13 +83,15 @@ router.get('/dashboard/appointments/:id', requirePermission('dashboard:read'), a
 // create Google Calendar event, create Appointment row, send booking
 // confirmation SMS, schedule the 60-min reminder + feedback SMS jobs.
 router.post('/dashboard/appointments', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
-  const { patientName, patientPhone, date, time, reason } = req.body as {
+  const { patientName, patientPhone, date, time, reason, doctorId } = req.body as {
     patientName: string;
     patientPhone: string;
     date: string;
     time: string;
     reason: string;
+    doctorId?: string;
   };
 
   if (!patientName || !patientPhone || !date || !time || !reason) {
@@ -101,6 +107,7 @@ router.post('/dashboard/appointments', requirePermission('appointments:write'), 
     const [hour, min] = finalTime.split(':').map(Number);
 
     const timezone = await getClinicTimezone(clinicId);
+    const doctor = await resolveDoctorForClinic(organizationId, clinicId, doctorId);
 
     const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
     const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
@@ -112,12 +119,12 @@ router.post('/dashboard/appointments', requirePermission('appointments:write'), 
     }
 
     let patient = await prisma.patient.findUnique({
-      where: { clinicId_phone: { clinicId, phone: cleanPhone } },
+      where: { organizationId_phone: { organizationId, phone: cleanPhone } },
     });
 
     if (!patient) {
       patient = await prisma.patient.create({
-        data: { clinicId, name: patientName, phone: cleanPhone },
+        data: { organizationId, clinicId, name: patientName, phone: cleanPhone },
       });
     } else {
       await prisma.patient.update({
@@ -127,6 +134,7 @@ router.post('/dashboard/appointments', requirePermission('appointments:write'), 
     }
 
     const googleEventId = await createCalendarEvent(clinicId, {
+      doctorId: doctor.id,
       patientName,
       patientPhone: cleanPhone,
       reason,
@@ -136,7 +144,9 @@ router.post('/dashboard/appointments', requirePermission('appointments:write'), 
 
     const appointment = await prisma.appointment.create({
       data: {
+        organizationId,
         clinicId,
+        doctorId: doctor.id,
         patientId: patient.id,
         reason,
         startAt: startAtDate,
@@ -187,17 +197,18 @@ router.post('/dashboard/appointments', requirePermission('appointments:write'), 
 
 // ── Reschedule from dashboard ─────────────────────────────────────────────────
 router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
   const { id } = req.params;
-  const { newDate, newTime } = req.body as { newDate: string; newTime: string };
+  const { newDate, newTime, doctorId } = req.body as { newDate: string; newTime: string; doctorId?: string };
 
   if (!newDate || !newTime) {
     return res.status(400).json({ error: 'newDate and newTime are required' });
   }
 
   const oldAppointment = await prisma.appointment.findFirst({
-    where: { id, clinicId },
-    include: { patient: true, clinic: true },
+    where: { id, organizationId, clinicId },
+    include: { patient: true, clinic: true, doctor: true },
   });
 
   if (!oldAppointment) return res.status(404).json({ error: 'Appointment not found' });
@@ -206,6 +217,7 @@ router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appoin
   }
 
   const timezone = oldAppointment.clinic.timezone ?? 'Asia/Kolkata';
+  const doctor = await resolveDoctorForClinic(organizationId, clinicId, doctorId ?? oldAppointment.doctorId);
 
   const [year, month, day] = newDate.split('-').map(Number);
   const [hour, min] = newTime.split(':').map(Number);
@@ -219,7 +231,7 @@ router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appoin
 
   if (oldAppointment.googleEventId) {
     try {
-      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId);
+      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId, oldAppointment.doctorId);
     } catch (err) {
       console.warn('Old calendar delete failed (continuing):', err);
     }
@@ -229,6 +241,7 @@ router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appoin
   await cancelReminders(id);
 
   const googleEventId = await createCalendarEvent(clinicId, {
+    doctorId: doctor.id,
     patientName:  oldAppointment.patient.name,
     patientPhone: oldAppointment.patient.phone,
     reason:       oldAppointment.reason,
@@ -238,7 +251,9 @@ router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appoin
 
   const newAppointment = await prisma.appointment.create({
     data: {
+      organizationId,
       clinicId,
+      doctorId:     doctor.id,
       patientId:    oldAppointment.patientId,
       reason:       oldAppointment.reason,
       startAt:      startAtDate,
@@ -282,12 +297,13 @@ router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appoin
 
 // ── Cancel from dashboard ─────────────────────────────────────────────────────
 router.patch('/dashboard/appointments/:id/cancel', requirePermission('appointments:write'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
   const { id } = req.params;
 
   const appointment = await prisma.appointment.findFirst({
-    where: { id, clinicId },
-    include: { patient: true, clinic: true },
+    where: { id, organizationId, clinicId },
+    include: { patient: true, clinic: true, doctor: true },
   });
 
   if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
@@ -299,7 +315,7 @@ router.patch('/dashboard/appointments/:id/cancel', requirePermission('appointmen
 
   if (appointment.googleEventId) {
     try {
-      await deleteCalendarEvent(clinicId, appointment.googleEventId);
+      await deleteCalendarEvent(clinicId, appointment.googleEventId, appointment.doctorId);
     } catch (err) {
       console.warn('Calendar delete failed (continuing):', err);
     }

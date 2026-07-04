@@ -6,6 +6,7 @@ import {
 import api, {
   PatientWithStats,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 interface PatientsResponse {
   patients: PatientWithStats[];
@@ -13,6 +14,11 @@ interface PatientsResponse {
 }
 
 export default function usePatients() {
+  const {
+    activeOrganizationId,
+    activeClinicId,
+  } = useAuth();
+
   const [patients, setPatients] =
     useState<
       PatientWithStats[]
@@ -89,7 +95,12 @@ export default function usePatients() {
     return () => {
       mounted = false;
     };
-  }, [page, search]);
+  }, [
+    activeClinicId,
+    activeOrganizationId,
+    page,
+    search,
+  ]);
 
   return {
     patients,

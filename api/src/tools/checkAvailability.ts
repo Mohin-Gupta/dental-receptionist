@@ -1,6 +1,8 @@
 import { getAvailableSlots } from '../services/googleCalendar';
 import { getClinicTimezone, isTodayInTimezone, parseInTimezone } from '../lib/timezone';
 import { slotCache } from './state';
+import { prisma } from '../lib/prisma';
+import { resolveDoctorForClinic } from '../services/doctors';
 
 export async function checkAvailability(
   clinicId: string,
@@ -8,6 +10,8 @@ export async function checkAvailability(
   parameters: any
 ): Promise<string> {
   const timezone = await getClinicTimezone(clinicId);
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
 
   // Check 7-day limit using clinic's local "today"
   const nowInTz = parseInTimezone(new Date().toISOString(), timezone);
@@ -30,7 +34,7 @@ export async function checkAvailability(
     return `Date is more than 7 days away. Say EXACTLY: "We can only book up to ${furthestReadable}. Would you like a date on or before then, or shall I have someone call you back closer to your preferred date?"`;
   }
 
-  const slots = await getAvailableSlots(clinicId, parameters.date);
+  const slots = await getAvailableSlots(clinicId, parameters.date, doctor.id);
   slots.sort((a, b) => {
     const [aH, aM] = a.start.split(':').map(Number);
     const [bH, bM] = b.start.split(':').map(Number);

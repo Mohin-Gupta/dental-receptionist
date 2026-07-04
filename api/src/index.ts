@@ -10,6 +10,7 @@ import dashboardRoutes from './routes/dashboard';
 import { scheduleDailyAgenda, scheduleAppointmentStatusUpdater } from './queues/repeatableJobs';
 import { prisma } from './lib/prisma';
 import { getWebOrigin } from './auth/config';
+import { cleanupConsumedAuthTokens } from './auth/tokenCleanup';
 dotenv.config();
 
 // Starts the worker that processes queued reminder jobs. Must be imported
@@ -72,8 +73,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 const PORT = process.env.PORT ?? 3001;
+const tokenCleanupTimer = setInterval(() => {
+  cleanupConsumedAuthTokens().catch((err: any) =>
+    console.warn('Auth token cleanup failed:', err?.message)
+  );
+}, 15 * 60 * 1000);
+tokenCleanupTimer.unref();
+
 app.listen(Number(PORT), '0.0.0.0', async () => {
   console.log(`API running on port ${PORT}`);
+
+  try {
+    await cleanupConsumedAuthTokens();
+  } catch (err: any) {
+    console.warn('Initial auth token cleanup failed:', err?.message);
+  }
 
   try {
     const updated = await prisma.appointment.updateMany({

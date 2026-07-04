@@ -3,8 +3,17 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
+  const organization = await prisma.organization.create({
+    data: {
+      name: 'Smile Dental Group',
+      phone: '+1xxxxxxxxxx',
+      planTier: 'starter',
+    },
+  });
+
   const clinic = await prisma.clinic.create({
     data: {
+      organizationId: organization.id,
       name: 'Smile Dental Clinic',
       phone: '+1xxxxxxxxxx',
       timezone: 'Asia/Kolkata',
@@ -20,7 +29,18 @@ async function main() {
     },
   });
 
-  console.log('✓ Clinic created');
+  await prisma.doctor.create({
+    data: {
+      organizationId: organization.id,
+      name: 'Smile Dental Doctor',
+      clinics: {
+        create: { clinicId: clinic.id },
+      },
+    },
+  });
+
+  console.log('✓ Organization, clinic, and doctor created');
+  console.log('Copy this into your .env → DEFAULT_ORGANIZATION_ID=' + organization.id);
   console.log('Copy this into your .env → DEFAULT_CLINIC_ID=' + clinic.id);
 }
 

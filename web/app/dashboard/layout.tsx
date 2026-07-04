@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import type { AuthClinic, AuthOrganization } from '@/lib/api';
 import {
   LayoutDashboard,
   Calendar,
@@ -11,6 +12,7 @@ import {
   Phone,
   Settings,
   Stethoscope,
+  Building2,
   Menu,
   X,
   LogOut,
@@ -29,9 +31,14 @@ interface SidebarProps {
   name?: string;
   email?: string;
   role?: string | null;
+  activeOrganizationId?: string | null;
+  activeClinicId?: string | null;
+  organizations: AuthOrganization[];
+  clinics: AuthClinic[];
   canManageSettings: boolean;
   closeMenu?: () => void;
   onLogout: () => void;
+  onScopeChange: (organizationId: string, clinicId: string) => void;
 }
 
 function SidebarContent({
@@ -39,9 +46,14 @@ function SidebarContent({
   name,
   email,
   role,
+  activeOrganizationId,
+  activeClinicId,
+  organizations,
+  clinics,
   canManageSettings,
   closeMenu,
   onLogout,
+  onScopeChange,
 }: SidebarProps) {
   const visibleNavItems = navItems.filter((item) =>
     item.href === '/dashboard/settings'
@@ -66,6 +78,48 @@ function SidebarContent({
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="px-4 py-4 border-b border-gray-800 space-y-2">
+        <div className="flex items-center gap-2 text-xs font-medium text-gray-500 uppercase">
+          <Building2 className="w-3.5 h-3.5" />
+          Location
+        </div>
+
+        {organizations.length > 1 && (
+          <select
+            value={activeOrganizationId ?? ''}
+            onChange={(event) => {
+              const organizationId = event.target.value;
+              const firstClinic = clinics.find((clinic) => clinic.organizationId === organizationId);
+              if (firstClinic) onScopeChange(organizationId, firstClinic.id);
+            }}
+            className="w-full bg-gray-800 border border-gray-700 text-gray-100 text-xs rounded-lg px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {organizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        <select
+          value={activeClinicId ?? ''}
+          onChange={(event) => {
+            const clinic = clinics.find((item) => item.id === event.target.value);
+            if (clinic) onScopeChange(clinic.organizationId, clinic.id);
+          }}
+          className="w-full bg-gray-800 border border-gray-700 text-gray-100 text-xs rounded-lg px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          {clinics
+            .filter((clinic) => !activeOrganizationId || clinic.organizationId === activeOrganizationId)
+            .map((clinic) => (
+              <option key={clinic.id} value={clinic.id}>
+                {clinic.name}
+              </option>
+            ))}
+        </select>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1">
@@ -132,7 +186,18 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { user, role, loading, logout, canManageSettings } = useAuth();
+  const {
+    user,
+    role,
+    loading,
+    logout,
+    setScope,
+    activeOrganizationId,
+    activeClinicId,
+    organizations,
+    clinics,
+    canManageSettings,
+  } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   useEffect(() => {
   setMobileOpen(false);
@@ -219,9 +284,17 @@ useEffect(() => {
             name={user.name}
             email={user.email}
             role={role}
+            activeOrganizationId={activeOrganizationId}
+            activeClinicId={activeClinicId}
+            organizations={organizations}
+            clinics={clinics}
             canManageSettings={canManageSettings}
             closeMenu={() => setMobileOpen(false)}
             onLogout={logout}
+            onScopeChange={(organizationId, clinicId) => {
+              void setScope(organizationId, clinicId);
+              setMobileOpen(false);
+            }}
           />
         </div>
       </aside>
@@ -233,8 +306,15 @@ useEffect(() => {
           name={user.name}
           email={user.email}
           role={role}
+          activeOrganizationId={activeOrganizationId}
+          activeClinicId={activeClinicId}
+          organizations={organizations}
+          clinics={clinics}
           canManageSettings={canManageSettings}
           onLogout={logout}
+          onScopeChange={(organizationId, clinicId) => {
+            void setScope(organizationId, clinicId);
+          }}
         />
       </aside>
 

@@ -1,4 +1,5 @@
 import { reminderQueue } from './reminderQueue';
+import { prisma } from '../lib/prisma';
 
 /**
  * repeatableJobs.ts
@@ -16,12 +17,19 @@ export async function scheduleDailyAgenda(): Promise<void> {
     }
   }
 
+  const defaultClinicId = process.env.DEFAULT_CLINIC_ID;
+  const defaultOrganizationId =
+    process.env.DEFAULT_ORGANIZATION_ID ??
+    (defaultClinicId
+      ? (await prisma.clinic.findUnique({ where: { id: defaultClinicId }, select: { organizationId: true } }))?.organizationId
+      : undefined);
+
   await reminderQueue.add(
     'daily-agenda',
     {
       type: 'agenda',
-      clinicId:
-        process.env.DEFAULT_CLINIC_ID,
+      clinicId: defaultClinicId,
+      organizationId: defaultOrganizationId,
     },
     {
       repeat: {

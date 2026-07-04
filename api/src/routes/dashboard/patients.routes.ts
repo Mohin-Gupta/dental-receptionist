@@ -5,23 +5,24 @@ import { requirePermission } from '../../auth/middleware';
 const router = Router();
 
 router.get('/dashboard/patients', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
   const { search, page = '1', limit = '20' } = req.query;
 
   type PatientWhere = {
-    clinicId: string;
+    organizationId: string;
     OR?: { name?: { contains: string; mode: 'insensitive' }; phone?: { contains: string } }[];
   };
 
   const where: PatientWhere = search
     ? {
-        clinicId,
+        organizationId,
         OR: [
           { name: { contains: search as string, mode: 'insensitive' } },
           { phone: { contains: search as string } },
         ],
       }
-    : { clinicId };
+    : { organizationId };
 
   const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
 
@@ -29,7 +30,7 @@ router.get('/dashboard/patients', requirePermission('dashboard:read'), async (re
     prisma.patient.findMany({
       where,
       include: {
-        appointments: { orderBy: { startAt: 'desc' }, take: 1 },
+        appointments: { where: { clinicId }, orderBy: { startAt: 'desc' }, take: 1 },
         _count: { select: { appointments: true } },
       },
       orderBy: { createdAt: 'desc' },

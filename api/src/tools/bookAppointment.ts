@@ -5,6 +5,7 @@ import { slotCache, confirmedDetails, nameCache, clearCallState } from './state'
 import { normalizeTime, toReadableTime } from './helpers';
 import { scheduleReminders } from '../queues/reminderQueue';
 import { sendSMS } from '../services/twilio';
+import { resolveDoctorForClinic } from '../services/doctors';
 
 export async function bookAppointment(
   clinicId: string,
@@ -26,6 +27,9 @@ export async function bookAppointment(
 
   // Load clinic timezone — single DB call, used everywhere below
   const timezone = await getClinicTimezone(clinicId);
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const organizationId = clinic.organizationId;
+  const doctor = await resolveDoctorForClinic(organizationId, clinicId, parameters.doctorId);
 
   const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
   const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
@@ -35,12 +39,12 @@ export async function bookAppointment(
   if (isNaN(startAtDate.getTime())) throw new Error(`Invalid date: ${date} ${finalTime}`);
 
   let patient = await prisma.patient.findUnique({
-    where: { clinicId_phone: { clinicId, phone: patientPhone } },
+    where: { organizationId_phone: { organizationId, phone: patientPhone } },
   });
 
   if (!patient) {
     patient = await prisma.patient.create({
-      data: { clinicId, name: patientName, phone: patientPhone },
+      data: { organizationId, clinicId, name: patientName, phone: patientPhone },
     });
   } else {
     await prisma.patient.update({
@@ -50,13 +54,14 @@ export async function bookAppointment(
   }
 
   const googleEventId = await createCalendarEvent(clinicId, {
+    doctorId: doctor.id,
     patientName, patientPhone, reason,
     startAt: startAtStr, endAt: endAtStr,
   });
 
   const appointment = await prisma.appointment.create({
     data: {
-      clinicId, patientId: patient.id, reason,
+      organizationId, clinicId, doctorId: doctor.id, patientId: patient.id, reason,
       startAt: startAtDate, endAt: endAtDate,
       status: 'scheduled', googleEventId,
     },
@@ -67,7 +72,6 @@ export async function bookAppointment(
 
   // ── Booking confirmation SMS ───────────────────────────────────────────────
   try {
-    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
     const clinicName = clinic?.name ?? 'the clinic';
     const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
     const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
@@ -85,7 +89,6 @@ export async function bookAppointment(
 
   // ── Schedule 60-min reminder + feedback SMS ────────────────────────────────
   try {
-    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
     await scheduleReminders(
       appointment.id,
       patientPhone,

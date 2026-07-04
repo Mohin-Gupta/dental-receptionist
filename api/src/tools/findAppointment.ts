@@ -9,9 +9,11 @@ export async function findAppointment(
 
   if (!searchName) return 'No name provided. Ask for the patient name.';
 
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+
   const patients = await prisma.patient.findMany({
     where: {
-      clinicId,
+      organizationId: clinic.organizationId,
       name: { contains: searchName, mode: 'insensitive' },
     },
   });

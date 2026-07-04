@@ -3,6 +3,10 @@ import { prisma } from '../lib/prisma';
 export async function buildClinicContext(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
+    include: {
+      organization: true,
+      doctors: { include: { doctor: true } },
+    },
   });
 
   if (!clinic) return '';
@@ -18,8 +22,25 @@ export async function buildClinicContext(clinicId: string): Promise<string> {
       return `${day}: ${hrs.open} – ${hrs.close}`;
     })
     .join(', ');
+  const doctorsText = clinic.doctors.length
+    ? clinic.doctors
+        .map(({ doctor }) => {
+          const details = [
+            doctor.qualification,
+            doctor.specialty,
+            doctor.yearsExperience ? `${doctor.yearsExperience} years experience` : null,
+          ].filter(Boolean).join(', ');
+          return `${doctor.name}${details ? ` (${details})` : ''}`;
+        })
+        .join('; ')
+    : 'Our dental team';
 
   return `
+ORGANIZATION:
+- Name: ${clinic.organization.name}
+- Phone: ${clinic.organization.phone ?? clinic.phone}
+- Website: ${clinic.organization.website ?? clinic.clinicWebsite ?? 'Not available'}
+
 CLINIC INFORMATION:
 - Name: ${clinic.name}
 - Address: ${clinic.clinicAddress ?? 'Contact clinic for address'}
@@ -31,9 +52,6 @@ CLINIC INFORMATION:
 - Hours: ${hoursText}
 
 DOCTOR INFORMATION:
-- Name: ${clinic.doctorName ?? 'Our dentist'}
-- Qualification: ${clinic.doctorQualification ?? 'Qualified dentist'}
-- Specialty: ${clinic.doctorSpecialty ?? 'General dentistry'}
-- Years of experience: ${clinic.doctorYOE ?? 'Several'} years
+- Doctors: ${doctorsText}
 `.trim();
 }

@@ -3,6 +3,7 @@ import api, {
   Appointment,
   AppointmentsResponse,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 export type TabType =
   | 'upcoming'
@@ -10,6 +11,11 @@ export type TabType =
   | 'cancelled';
 
 export default function useAppointments() {
+  const {
+    activeOrganizationId,
+    activeClinicId,
+  } = useAuth();
+
   const [appointments, setAppointments] =
     useState<Appointment[]>([]);
 
@@ -56,7 +62,12 @@ export default function useAppointments() {
         .finally(() => {
           setLoading(false);
         });
-    }, [activeTab, page]);
+    }, [
+      activeTab,
+      activeClinicId,
+      activeOrganizationId,
+      page,
+    ]);
 
   useEffect(() => {
     fetchAppointments();

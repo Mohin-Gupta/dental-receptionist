@@ -6,6 +6,7 @@ import { requirePermission } from '../../auth/middleware';
 const router = Router();
 
 router.get('/dashboard/calls', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+  const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
   const { page = '1', limit = '20', direction } = req.query as {
     page?: string;
@@ -15,8 +16,8 @@ router.get('/dashboard/calls', requirePermission('dashboard:read'), async (req: 
   const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
 
   const where = direction
-    ? { clinicId, direction }
-    : { clinicId };
+    ? { organizationId, clinicId, direction }
+    : { organizationId, clinicId };
 
   const [calls, total] = await Promise.all([
     prisma.callLog.findMany({

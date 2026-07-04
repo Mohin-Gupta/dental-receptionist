@@ -44,6 +44,12 @@ async function main() {
     },
   });
 
+  await prisma.organizationMembership.upsert({
+    where: { userId_organizationId: { userId: user.id, organizationId: clinic.organizationId } },
+    update: { role: 'owner' },
+    create: { userId: user.id, organizationId: clinic.organizationId, role: 'owner' },
+  });
+
   await prisma.clinicMembership.upsert({
     where: { userId_clinicId: { userId: user.id, clinicId } },
     update: { role: 'owner' },

@@ -16,6 +16,7 @@ export async function auditAction(
   action: string,
   options: {
     userId?: string | null;
+    organizationId?: string | null;
     clinicId?: string | null;
     targetType?: string;
     targetId?: string;
@@ -27,6 +28,7 @@ export async function auditAction(
     await prisma.auditLog.create({
       data: {
         userId: options.userId ?? req.auth?.userId ?? null,
+        organizationId: options.organizationId ?? req.auth?.organizationId ?? null,
         clinicId: options.clinicId ?? req.auth?.clinicId ?? null,
         action,
         targetType: options.targetType,
@@ -46,6 +48,7 @@ export async function securityEvent(
   type: string,
   options: {
     userId?: string | null;
+    organizationId?: string | null;
     clinicId?: string | null;
     metadata?: Record<string, unknown>;
   } = {}
@@ -55,6 +58,7 @@ export async function securityEvent(
     await prisma.securityEvent.create({
       data: {
         userId: options.userId ?? null,
+        organizationId: options.organizationId ?? req.auth?.organizationId ?? null,
         clinicId: options.clinicId ?? null,
         type,
         ipAddress: meta.ipAddress,

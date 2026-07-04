@@ -1,6 +1,8 @@
 import { getAvailableSlots } from '../services/googleCalendar';
 import { slotCache } from './state';
 import { normalizeTime, toReadableTime } from './helpers';
+import { prisma } from '../lib/prisma';
+import { resolveDoctorForClinic } from '../services/doctors';
 
 export async function validateSlot(
   clinicId: string,
@@ -9,10 +11,12 @@ export async function validateSlot(
 ): Promise<string> {
   const { date, time } = parameters;
   const normalized = normalizeTime(time);
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
 
   let allSlots = slotCache[callId]?.slots ?? [];
   if (!slotCache[callId] || slotCache[callId].date !== date) {
-    const fetched = await getAvailableSlots(clinicId, date);
+    const fetched = await getAvailableSlots(clinicId, date, doctor.id);
     fetched.sort((a, b) => {
       const [aH, aM] = a.start.split(':').map(Number);
       const [bH, bM] = b.start.split(':').map(Number);

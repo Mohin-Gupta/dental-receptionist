@@ -1,16 +1,16 @@
-import { ClinicSettings } from '@/lib/api';
+import { BranchSettings } from '@/lib/api';
 import { createDefaultBusinessHours } from '../utils/settingsHelpers';
 import Section from './Section';
 import DAY_LABELS from '../constants/dayLabels';
 
 interface Props {
-  form: ClinicSettings;
+  form: BranchSettings;
 
   update: <
-    K extends keyof ClinicSettings
+    K extends keyof BranchSettings
   >(
     key: K,
-    value: ClinicSettings[K]
+    value: BranchSettings[K]
   ) => void;
 }
 

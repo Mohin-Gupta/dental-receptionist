@@ -30,6 +30,22 @@ const TOOL_HANDLERS: Record<
   bookAppointment:       (c, id, p)  => bookAppointment(c, id, p),
 };
 
+async function resolveVapiClinic() {
+  if (process.env.DEFAULT_CLINIC_ID) {
+    return prisma.clinic.findUniqueOrThrow({ where: { id: process.env.DEFAULT_CLINIC_ID } });
+  }
+
+  if (process.env.DEFAULT_ORGANIZATION_ID) {
+    const clinic = await prisma.clinic.findFirst({
+      where: { organizationId: process.env.DEFAULT_ORGANIZATION_ID },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (clinic) return clinic;
+  }
+
+  throw new Error('Vapi default clinic is not configured');
+}
+
 router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   const event = req.body;
   const type  = event?.message?.type;
@@ -39,7 +55,8 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   try {
     if (type === 'tool-calls') {
       const toolCallList = event.message.toolCallList;
-      const clinicId     = process.env.DEFAULT_CLINIC_ID!;
+      const clinic       = await resolveVapiClinic();
+      const clinicId     = clinic.id;
       const callId       = event.message.call?.id ?? 'unknown';
       const results      = [];
 
@@ -76,7 +93,8 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     if (type === 'end-of-call-report') {
       const call       = event.message.call;
       const transcript = event.message.transcript ?? [];
-      const clinicId   = process.env.DEFAULT_CLINIC_ID!;
+      const clinic     = await resolveVapiClinic();
+      const clinicId   = clinic.id;
 
       if (call?.id) clearCallState(call.id);
 
@@ -91,7 +109,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
       if (phoneNumber) {
         const cleanPhone = phoneNumber.replace(/\D/g, '').slice(-10);
         const patient = await prisma.patient.findFirst({
-          where: { clinicId, phone: { endsWith: cleanPhone } },
+          where: { organizationId: clinic.organizationId, phone: { endsWith: cleanPhone } },
         });
         if (patient) patientId = patient.id;
       }
@@ -99,6 +117,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
       try {
         const saved = await prisma.callLog.create({
           data: {
+            organizationId: clinic.organizationId,
             clinicId,
             vapiCallId:  call.id,
             patientId:   patientId ?? null,

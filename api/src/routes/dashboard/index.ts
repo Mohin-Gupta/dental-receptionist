@@ -6,6 +6,7 @@ import patientsRoutes from './patients.routes';
 import callsRoutes from './calls.routes';
 import settingsRoutes from './settings.routes';
 import remindersRoutes from './reminders.routes';
+import doctorsRoutes from './doctors.routes';
 import { requireAuth, requireClinic, requireCsrf } from '../../auth/middleware';
 
 /**
@@ -28,5 +29,6 @@ router.use(patientsRoutes);
 router.use(callsRoutes);
 router.use(settingsRoutes);
 router.use(remindersRoutes);
+router.use(doctorsRoutes);
 
 export default router;

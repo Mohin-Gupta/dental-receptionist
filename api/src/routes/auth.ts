@@ -3,8 +3,32 @@ import { getAuthUrl, handleOAuthCallback } from '../services/googleCalendar';
 import { buildClinicContext } from '../services/clinicInfo';
 import { requireAuth, requireClinic, requireMachineAuth, requirePermission } from '../auth/middleware';
 import { auditAction } from '../auth/audit';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
+
+async function resolveDefaultClinicId(): Promise<string> {
+  if (process.env.DEFAULT_CLINIC_ID) {
+    return process.env.DEFAULT_CLINIC_ID;
+  }
+
+  const clinic = await prisma.clinic.findFirst({
+    where: process.env.DEFAULT_ORGANIZATION_ID
+      ? {
+          organizationId:
+            process.env.DEFAULT_ORGANIZATION_ID,
+        }
+      : undefined,
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+
+  if (!clinic) {
+    throw new Error('No default clinic is configured');
+  }
+
+  return clinic.id;
+}
 
 // Clinic admin visits this URL to connect their Google Calendar
 router.get('/auth/google', requireAuth, requireClinic, requirePermission('integrations:manage'), (req, res) => {
@@ -14,8 +38,8 @@ router.get('/auth/google', requireAuth, requireClinic, requirePermission('integr
 });
 
 router.get('/clinic/context', requireMachineAuth, async (req, res) => {
-  const clinicId = process.env.DEFAULT_CLINIC_ID!;
   try {
+    const clinicId = await resolveDefaultClinicId();
     const context = await buildClinicContext(clinicId);
     res.json({ context });
   } catch (err: any) {
@@ -35,6 +59,7 @@ router.get('/auth/google/callback', requireAuth, requireClinic, requirePermissio
     }
     await handleOAuthCallback(code, clinicId);
     await auditAction(req, 'integration.google_calendar_connected', {
+      organizationId: req.auth!.organizationId,
       clinicId,
       targetType: 'Clinic',
       targetId: clinicId,

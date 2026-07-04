@@ -36,43 +36,75 @@ export function getAuthUrl(clinicId: string): string {
   });
 }
 
-export async function handleOAuthCallback(code: string, clinicId: string) {
+export async function handleOAuthCallback(code: string, clinicId: string, doctorId?: string) {
   const oauth2Client = getOAuthClient();
   const { tokens } = await oauth2Client.getToken(code);
-  await prisma.clinic.update({
-    where: { id: clinicId },
-    data: { googleTokens: JSON.stringify(tokens) },
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  await prisma.calendarConnection.create({
+    data: {
+      organizationId: clinic.organizationId,
+      clinicId: doctorId ? null : clinicId,
+      doctorId,
+      scope: doctorId ? 'doctor' : 'clinic',
+      googleCalendarId: clinic.googleCalendarId,
+      googleTokens: JSON.stringify(tokens),
+    },
   });
-  console.log('Google Calendar connected for clinic:', clinicId);
+  console.log('Google Calendar connected for:', doctorId ? `doctor ${doctorId}` : `clinic ${clinicId}`);
   return tokens;
 }
 
-async function getAuthenticatedClient(clinicId: string) {
+async function getAuthenticatedClient(clinicId: string, doctorId?: string) {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  if (!clinic.googleTokens) throw new Error('Google Calendar not connected');
+  const connection =
+    (doctorId
+      ? await prisma.calendarConnection.findFirst({
+          where: { doctorId, scope: 'doctor' },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null) ??
+    (await prisma.calendarConnection.findFirst({
+      where: { clinicId, scope: 'clinic' },
+      orderBy: { createdAt: 'desc' },
+    }));
+
+  const rawTokens = connection?.googleTokens ?? clinic.googleTokens;
+  if (!rawTokens) throw new Error('Google Calendar not connected');
 
   const oauth2Client = getOAuthClient();
-  const tokens = JSON.parse(clinic.googleTokens as string);
+  const tokens = JSON.parse(rawTokens);
   oauth2Client.setCredentials(tokens);
 
   oauth2Client.on('tokens', async (newTokens) => {
     const merged = { ...tokens, ...newTokens };
-    await prisma.clinic.update({
-      where: { id: clinicId },
-      data: { googleTokens: JSON.stringify(merged) },
-    });
+    if (connection) {
+      await prisma.calendarConnection.update({
+        where: { id: connection.id },
+        data: { googleTokens: JSON.stringify(merged) },
+      });
+    } else {
+      await prisma.clinic.update({
+        where: { id: clinicId },
+        data: { googleTokens: JSON.stringify(merged) },
+      });
+    }
   });
 
-  return { oauth2Client, clinic };
+  return {
+    oauth2Client,
+    clinic,
+    calendarId: connection?.googleCalendarId ?? clinic.googleCalendarId ?? 'primary',
+  };
 }
 
 // ── Availability ──────────────────────────────────────────────────────────────
 
 export async function getAvailableSlots(
   clinicId: string,
-  dateStr: string
+  dateStr: string,
+  doctorId?: string
 ): Promise<{ start: string; end: string; label: string }[]> {
-  const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
+  const { oauth2Client, clinic, calendarId } = await getAuthenticatedClient(clinicId, doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
@@ -85,7 +117,20 @@ export async function getAvailableSlots(
 
   console.log(`Day for ${dateStr}: ${dayName}`);
 
-  const hours = businessHours[dayName];
+  const doctorAvailability = doctorId
+    ? await prisma.doctorAvailability.findFirst({
+        where: {
+          doctorId,
+          dayOfWeek: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
+          OR: [{ clinicId }, { clinicId: null }],
+        },
+        orderBy: { clinicId: 'desc' },
+      })
+    : null;
+
+  const hours = doctorAvailability
+    ? { open: doctorAvailability.open, close: doctorAvailability.close }
+    : businessHours[dayName];
   if (!hours) {
     console.log(`Clinic closed on ${dayName}`);
     return [];
@@ -135,12 +180,12 @@ export async function getAvailableSlots(
       timeMin: dayStartStr,
       timeMax: dayEndStr,
       timeZone: timezone,
-      items: [{ id: clinic.googleCalendarId ?? 'primary' }],
+      items: [{ id: calendarId }],
     },
   });
 
   const busySlots =
-    freeBusy.data.calendars?.[clinic.googleCalendarId ?? 'primary']?.busy ?? [];
+    freeBusy.data.calendars?.[calendarId]?.busy ?? [];
 
   console.log('Busy slots:', JSON.stringify(busySlots));
 
@@ -196,7 +241,8 @@ export async function getAvailableSlots(
 
 export async function createCalendarEvent(
   clinicId: string,
-  appointment: {
+    appointment: {
+    doctorId?: string;
     patientName: string;
     patientPhone: string;
     reason: string;
@@ -204,12 +250,12 @@ export async function createCalendarEvent(
     endAt: string;
   }
 ): Promise<string> {
-  const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
+  const { oauth2Client, clinic, calendarId } = await getAuthenticatedClient(clinicId, appointment.doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
   const event = await calendar.events.insert({
-    calendarId: clinic.googleCalendarId ?? 'primary',
+    calendarId,
     requestBody: {
       summary: `${appointment.patientName} — ${appointment.reason}`,
       description: `Patient phone: ${appointment.patientPhone}\nBooked by Maya (AI Receptionist)`,
@@ -224,13 +270,14 @@ export async function createCalendarEvent(
 
 export async function deleteCalendarEvent(
   clinicId: string,
-  googleEventId: string
+  googleEventId: string,
+  doctorId?: string
 ): Promise<void> {
-  const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
+  const { oauth2Client, calendarId } = await getAuthenticatedClient(clinicId, doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
   await calendar.events.delete({
-    calendarId: clinic.googleCalendarId ?? 'primary',
+    calendarId,
     eventId: googleEventId,
   });
 
@@ -241,13 +288,14 @@ export async function updateCalendarEvent(
   clinicId: string,
   googleEventId: string,
   update: {
+    doctorId?: string;
     patientName?: string;
     reason?: string;
     startAt?: string;
     endAt?: string;
   }
 ): Promise<void> {
-  const { oauth2Client, clinic } = await getAuthenticatedClient(clinicId);
+  const { oauth2Client, clinic, calendarId } = await getAuthenticatedClient(clinicId, update.doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
@@ -259,7 +307,7 @@ export async function updateCalendarEvent(
   if (update.endAt)   patch.end   = { dateTime: update.endAt,   timeZone: timezone };
 
   await calendar.events.patch({
-    calendarId: clinic.googleCalendarId ?? 'primary',
+    calendarId,
     eventId: googleEventId,
     requestBody: patch,
   });

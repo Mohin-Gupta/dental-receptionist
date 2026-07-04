@@ -1,4 +1,4 @@
-import { ClinicSettings } from '@/lib/api';
+import { BranchSettings } from '@/lib/api';
 
 import Field from './Field';
 import Section from './Section';
@@ -7,12 +7,12 @@ import TimezonePreview from './TimezonePreview';
 import { TIMEZONE_OPTIONS } from '../constants/timezoneOptions';
 
 interface Props {
-  form: ClinicSettings;
+  form: BranchSettings;
   update: <
-    K extends keyof ClinicSettings
+    K extends keyof BranchSettings
   >(
     key: K,
-    value: ClinicSettings[K]
+    value: BranchSettings[K]
   ) => void;
 }
 

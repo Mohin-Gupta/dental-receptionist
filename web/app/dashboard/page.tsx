@@ -2,6 +2,7 @@
 import StatCard, { type StatCardProps,} from './components/StatCard';
 import { useEffect, useState } from 'react';
 import api, { DashboardStats, Appointment, formatTime, nowInTimezone } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import {
   Calendar,
   Users,
@@ -29,16 +30,24 @@ const STATUS_CONFIG: Record<string, StatusConfigItem> = {
 
 
 export default function DashboardPage() {
+  const {
+    activeOrganizationId,
+    activeClinicId,
+  } = useAuth();
+
   const [stats, setStats]   = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState('');
 
   useEffect(() => {
+    setLoading(true);
+    setError('');
+
     api.get<DashboardStats>('/dashboard/stats')
       .then(r => setStats(r.data))
       .catch(() => setError('Failed to load dashboard stats'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [activeOrganizationId, activeClinicId]);
 
   // Use timezone from API response — falls back to IST for existing clinics
   const timezone = stats?.timezone ?? 'Asia/Kolkata';

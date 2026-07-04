@@ -3,10 +3,16 @@ import { useEffect, useState } from 'react';
 import api, {
   CallsResponse,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 import type { DirectionTab } from '../utils/callHelpers';
 
 export default function useCalls() {
+  const {
+    activeOrganizationId,
+    activeClinicId,
+  } = useAuth();
+
   const [calls, setCalls] =
     useState<CallsResponse['calls']>(
       []
@@ -76,7 +82,12 @@ export default function useCalls() {
     return () => {
       mounted = false;
     };
-  }, [page, activeTab]);
+  }, [
+    activeClinicId,
+    activeOrganizationId,
+    page,
+    activeTab,
+  ]);
 
   return {
     calls,

@@ -1,22 +1,12 @@
-import { ClinicSettings } from '@/lib/api';
+import { BranchSettings } from '@/lib/api';
 
 export function getTimezone(
-  form: ClinicSettings
+  form: BranchSettings
 ): string {
   return (
     form.timezone ??
     'Asia/Kolkata'
   );
-}
-
-export function parseYearsOfExperience(
-  value: string
-): number | null {
-  const parsed = parseInt(value, 10);
-
-  return Number.isNaN(parsed)
-    ? null
-    : parsed;
 }
 
 export function createDefaultBusinessHours() {
