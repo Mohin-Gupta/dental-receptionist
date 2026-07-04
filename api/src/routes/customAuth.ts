@@ -27,7 +27,6 @@ const loginSchema = z.object({
 
 const inviteSchema = z.object({
   email: emailSchema,
-  role: z.enum(['owner', 'admin', 'staff', 'viewer']).optional(),
   organizationRole: z.enum(['owner', 'admin', 'viewer']).optional(),
   clinicRole: z.enum(['admin', 'staff', 'viewer']).optional(),
   clinicId: z.string().min(1).optional(),
@@ -183,38 +182,41 @@ router.get('/auth/csrf', requireAuth, async (req: Request, res: Response) => {
   res.json({ csrfToken });
 });
 
-router.post(
-  '/auth/invites',
-  requireAuth,
-  requireClinic,
-  requireCsrf,
-  requirePermission('users:manage'),
+router.post('/auth/invites', requireAuth, requireClinic, requireCsrf, requirePermission('users:manage'),
   async (req: Request, res: Response) => {
     const parsed = inviteSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Invalid invite details' });
 
-    const requestedRole = parsed.data.role;
-    const organizationRole =
-      parsed.data.organizationRole ??
-      (requestedRole === 'owner' ? 'owner' : undefined);
-    const clinicRole =
-      parsed.data.clinicRole ??
-      (requestedRole && requestedRole !== 'owner' ? requestedRole : undefined) ??
-      (!organizationRole ? 'staff' : undefined);
-    const clinicId = clinicRole ? (parsed.data.clinicId ?? req.auth!.clinicId) : undefined;
+    const organizationRole = parsed.data.organizationRole;
+    const clinicRole = parsed.data.clinicRole;
+    const clinicId = parsed.data.clinicId;
 
     if (!organizationRole && !clinicRole) {
       return res.status(400).json({ error: 'Invite must include an organization or clinic role' });
     }
 
-    if (clinicId && !req.auth!.clinics.some((clinic) => clinic.id === clinicId)) {
+    if (clinicRole && !clinicId) {
+      return res.status(400).json({ error: 'Clinic role requires a clinicId' });
+    }
+
+    if (!clinicRole && clinicId) {
+      return res.status(400).json({ error: 'clinicId requires a clinic role' });
+    }
+
+    const targetClinic = clinicId
+      ? req.auth!.clinics.find(
+          (clinic) => clinic.id === clinicId && clinic.organizationId === req.auth!.organizationId
+        )
+      : null;
+
+    if (clinicId && !targetClinic) {
       return res.status(403).json({ error: 'Clinic access denied' });
     }
 
     const token = generateToken(32);
     const expiresAt = new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000);
 
-    await cleanupConsumedAuthTokens();
+    // await cleanupConsumedAuthTokens();
     await prisma.inviteToken.deleteMany({
       where: {
         organizationId: req.auth!.organizationId,
@@ -228,7 +230,6 @@ router.post(
         organizationId: req.auth!.organizationId,
         clinicId,
         email: parsed.data.email,
-        role: requestedRole ?? clinicRole ?? organizationRole ?? 'staff',
         organizationRole,
         clinicRole,
         tokenHash: hashToken(token),
@@ -339,7 +340,7 @@ router.post('/auth/forgot-password', authRateLimit, async (req: Request, res: Re
   const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
   if (user && user.status === 'active') {
     const token = generateToken(32);
-    await cleanupConsumedAuthTokens();
+    // await cleanupConsumedAuthTokens();
     await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
     await prisma.passwordResetToken.create({
       data: {

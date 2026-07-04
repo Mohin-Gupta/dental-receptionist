@@ -146,7 +146,6 @@ model InviteToken {
   organizationId String
   clinicId     String?
   email        String
-  role         String    @default("staff")
   organizationRole String?
   clinicRole   String?
   tokenHash    String    @unique
