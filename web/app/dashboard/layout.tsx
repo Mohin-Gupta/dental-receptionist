@@ -16,14 +16,20 @@ import {
   Menu,
   X,
   LogOut,
+  CreditCard,
+  PlugZap,
+  UsersRound,
 } from 'lucide-react';
 
 const navItems = [
-  { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
-  { href: '/dashboard/appointments', label: 'Appointments', icon: Calendar },
-  { href: '/dashboard/patients', label: 'Patients', icon: Users },
-  { href: '/dashboard/calls', label: 'Call Logs', icon: Phone },
-  { href: '/dashboard/settings', label: 'Settings', icon: Settings },
+  { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, access: 'all' },
+  { href: '/dashboard/appointments', label: 'Appointments', icon: Calendar, access: 'all' },
+  { href: '/dashboard/patients', label: 'Patients', icon: Users, access: 'all' },
+  { href: '/dashboard/calls', label: 'Call Logs', icon: Phone, access: 'all' },
+  { href: '/dashboard/billing', label: 'Billing & usage', icon: CreditCard, access: 'billing' },
+  { href: '/dashboard/integrations', label: 'Integrations', icon: PlugZap, access: 'integrations' },
+  { href: '/dashboard/organization', label: 'Organization', icon: UsersRound, access: 'users' },
+  { href: '/dashboard/settings', label: 'Settings', icon: Settings, access: 'settings' },
 ];
 
 interface SidebarProps {
@@ -36,6 +42,9 @@ interface SidebarProps {
   organizations: AuthOrganization[];
   clinics: AuthClinic[];
   canManageSettings: boolean;
+  canManageUsers: boolean;
+  canReadBilling: boolean;
+  canManageIntegrations: boolean;
   closeMenu?: () => void;
   onLogout: () => void;
   onScopeChange: (organizationId: string, clinicId: string) => void;
@@ -51,15 +60,23 @@ function SidebarContent({
   organizations,
   clinics,
   canManageSettings,
+  canManageUsers,
+  canReadBilling,
+  canManageIntegrations,
   closeMenu,
   onLogout,
   onScopeChange,
 }: SidebarProps) {
-  const visibleNavItems = navItems.filter((item) =>
-    item.href === '/dashboard/settings'
-      ? canManageSettings
-      : true
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.access === 'settings') return canManageSettings;
+    if (item.access === 'users') return canManageUsers;
+    if (item.access === 'billing') return canReadBilling;
+    if (item.access === 'integrations') return canManageIntegrations;
+    return true;
+  });
+  const activeOrganizationName = organizations.find(
+    (organization) => organization.id === activeOrganizationId
+  )?.name;
 
   return (
     <>
@@ -71,7 +88,7 @@ function SidebarContent({
 
           <div>
             <p className="text-sm font-semibold text-white">
-              Smile Dental
+              {activeOrganizationName ?? 'AI Receptionist'}
             </p>
             <p className="text-xs text-gray-400">
               Admin Portal
@@ -197,6 +214,9 @@ export default function DashboardLayout({
     organizations,
     clinics,
     canManageSettings,
+    canManageUsers,
+    canReadBilling,
+    canManageIntegrations,
   } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   useEffect(() => {
@@ -240,7 +260,7 @@ useEffect(() => {
         <div className="flex items-center gap-2">
           <Stethoscope className="w-4 h-4 text-blue-500" />
           <span className="text-sm font-semibold text-white">
-            Smile Dental
+            {organizations.find((organization) => organization.id === activeOrganizationId)?.name ?? 'AI Receptionist'}
           </span>
         </div>
 
@@ -289,6 +309,9 @@ useEffect(() => {
             organizations={organizations}
             clinics={clinics}
             canManageSettings={canManageSettings}
+            canManageUsers={canManageUsers}
+            canReadBilling={canReadBilling}
+            canManageIntegrations={canManageIntegrations}
             closeMenu={() => setMobileOpen(false)}
             onLogout={logout}
             onScopeChange={(organizationId, clinicId) => {
@@ -311,6 +334,9 @@ useEffect(() => {
           organizations={organizations}
           clinics={clinics}
           canManageSettings={canManageSettings}
+          canManageUsers={canManageUsers}
+          canReadBilling={canReadBilling}
+          canManageIntegrations={canManageIntegrations}
           onLogout={logout}
           onScopeChange={(organizationId, clinicId) => {
             void setScope(organizationId, clinicId);

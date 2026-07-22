@@ -60,17 +60,37 @@ export function toClinicTimeString(
   minute: number,
   timezone: string
 ): string {
-  // Use Intl to get the UTC offset for this timezone at this moment
   const pad = (n: number) => n.toString().padStart(2, '0');
+  const naiveUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offsets = new Set<number>();
+  for (const sampleHours of [-48, -24, 0, 24, 48]) {
+    offsets.add(offsetMinutesAt(new Date(naiveUtc + sampleHours * 60 * 60 * 1000), timezone));
+  }
 
-  // Build a date string that we can interpret as local time in the target tz
-  // We use the trick of formatting a known UTC time and seeing the offset
-  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const candidates = [...offsets]
+    .map(offset => new Date(naiveUtc - offset * 60_000))
+    .filter(candidate => {
+      const local = parseInTimezone(candidate.toISOString(), timezone);
+      return local.year === year && local.month === month && local.day === day &&
+        local.hour === hour && local.minute === minute;
+    })
+    .sort((left, right) => left.getTime() - right.getTime());
 
-  // Get the offset string for this timezone at this date
-  const offsetStr = getOffsetString(probe, timezone);
-
+  if (candidates.length === 0) {
+    throw new RangeError('The requested local time does not exist in this timezone');
+  }
+  // During a fall-back fold there are two valid instants. Choose the earlier
+  // occurrence consistently; overlap exclusion still prevents double booking.
+  const offsetStr = getOffsetString(candidates[0], timezone);
   return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offsetStr}`;
+}
+
+function offsetMinutesAt(date: Date, timezone: string): number {
+  const offset = getOffsetString(date, timezone);
+  const match = /^([+-])(\d{2}):(\d{2})$/.exec(offset);
+  if (!match) throw new RangeError('Timezone offset could not be resolved');
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === '-' ? -minutes : minutes;
 }
 
 /**
@@ -138,20 +158,12 @@ export function parseInTimezone(
  * Adds minutes to an ISO string, returning a new ISO string in the same timezone.
  */
 export function addMinutesToClinicString(isoStr: string, minutes: number, timezone: string): string {
-  const { year, month, day, hour, minute } = parseInTimezone(isoStr, timezone);
-  const totalMinutes = hour * 60 + minute + minutes;
-  const newHour = Math.floor(totalMinutes / 60) % 24;
-  const newMinute = totalMinutes % 60;
-  const extraDays = Math.floor(totalMinutes / (60 * 24));
-  const baseDate = new Date(Date.UTC(year, month - 1, day + extraDays));
-  return toClinicTimeString(
-    baseDate.getUTCFullYear(),
-    baseDate.getUTCMonth() + 1,
-    baseDate.getUTCDate(),
-    newHour,
-    newMinute,
-    timezone
-  );
+  const instant = new Date(isoStr);
+  if (Number.isNaN(instant.getTime())) throw new RangeError('Invalid ISO date');
+  const next = new Date(instant.getTime() + minutes * 60_000);
+  const local = parseInTimezone(next.toISOString(), timezone);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${local.year}-${pad(local.month)}-${pad(local.day)}T${pad(local.hour)}:${pad(local.minute)}:00${getOffsetString(next, timezone)}`;
 }
 
 // ── Formatting for display ────────────────────────────────────────────────────
@@ -213,7 +225,16 @@ export function getTodayRangeInTimezone(timezone: string): { todayStart: Date; t
   );
 
   const todayStart = new Date(midnightISO);
-  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+  const nextCalendarDate = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + 1));
+  const nextMidnightISO = toClinicTimeString(
+    nextCalendarDate.getUTCFullYear(),
+    nextCalendarDate.getUTCMonth() + 1,
+    nextCalendarDate.getUTCDate(),
+    0,
+    0,
+    timezone
+  );
+  const todayEnd = new Date(nextMidnightISO);
 
   return { todayStart, todayEnd };
 }

@@ -1,13 +1,18 @@
 import { getAvailableSlots } from '../services/googleCalendar';
 import { getClinicTimezone, isTodayInTimezone, parseInTimezone } from '../lib/timezone';
-import { slotCache } from './state';
+import { setSlotState } from './state';
 import { prisma } from '../lib/prisma';
 import { resolveDoctorForClinic } from '../services/doctors';
+
+interface CheckAvailabilityParameters {
+  date: string;
+  doctorId?: string | null;
+}
 
 export async function checkAvailability(
   clinicId: string,
   callId: string,
-  parameters: any
+  parameters: CheckAvailabilityParameters
 ): Promise<string> {
   const timezone = await getClinicTimezone(clinicId);
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
@@ -49,10 +54,22 @@ export async function checkAvailability(
     return `No slots available on ${parameters.date}. Say EXACTLY: "I don't have any openings on that day — would another date work for you?" Do not say the clinic is closed unless this exact message is what you're reading.`;
   }
 
-  slotCache[callId] = {
-    date: parameters.date,
-    slots: slots.map(s => ({ start: s.start, label: s.label })),
-  };
+  try {
+    await setSlotState(
+      { clinicId, callId },
+      {
+        date: parameters.date,
+        slots: slots.map(s => ({ start: s.start, label: s.label })),
+      }
+    );
+  } catch (error) {
+    // Availability is still safe to present. validateSlot will query the source
+    // of truth again if Redis is unavailable or the state was not cached.
+    console.warn(
+      'Availability state was not cached:',
+      error instanceof Error ? error.message : 'unknown Redis error'
+    );
+  }
 
   const first4   = slots.slice(0, 4).map(s => s.label).join(', ');
   const lastSlot = slots[slots.length - 1].label;

@@ -4,7 +4,12 @@ import { clearSessionCookieOptions, SESSION_COOKIE_NAME, SESSION_TTL_DAYS, sessi
 import { generateToken, hashToken } from './crypto';
 import { getRequestMeta } from './audit';
 
-export async function createSession(req: Request, res: Response, userId: string): Promise<{ csrfToken: string; sessionId: string }> {
+export async function createSession(
+  req: Request,
+  res: Response,
+  userId: string,
+  options: { mfaVerified?: boolean } = {}
+): Promise<{ csrfToken: string; sessionId: string }> {
   const sessionToken = generateToken(32);
   const csrfToken = generateToken(32);
   const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
@@ -15,6 +20,7 @@ export async function createSession(req: Request, res: Response, userId: string)
       userId,
       tokenHash: hashToken(sessionToken),
       csrfTokenHash: hashToken(csrfToken),
+      mfaVerifiedAt: options.mfaVerified ? new Date() : null,
       expiresAt,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,

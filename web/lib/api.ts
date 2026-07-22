@@ -19,6 +19,12 @@ export function setAuthScope(organizationId: string | null, clinicId: string | n
   activeClinicId = clinicId;
 }
 
+/** Stable mutation identifier for server/provider-side replay protection. */
+export function createIdempotencyKey(scope: string): string {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${scope}:${id}`;
+}
+
 export async function refreshCsrfToken(): Promise<string | null> {
   const response = await api.get<{ csrfToken: string }>('/auth/csrf');
   csrfToken = response.data.csrfToken;
@@ -47,6 +53,7 @@ api.interceptors.response.use(
       !window.location.pathname.startsWith('/forgot-password') &&
       !window.location.pathname.startsWith('/reset-password') &&
       !window.location.pathname.startsWith('/accept-invite') &&
+      !window.location.pathname.startsWith('/register') &&
       !window.location.pathname.startsWith('/verify-email')
     ) {
       window.location.href = '/sign-in';
@@ -98,6 +105,14 @@ export interface AuthMeResponse {
   organizations: AuthOrganization[];
   clinics: AuthClinic[];
   memberships: AuthMembership[];
+}
+
+export interface OrganizationRegistrationResponse {
+  success: boolean;
+  emailVerificationRequired: boolean;
+  verificationDeliveryPending?: boolean;
+  organizationId?: string;
+  replayed?: boolean;
 }
 
 export interface Patient {
@@ -242,6 +257,139 @@ export interface Doctor {
 
 export interface DoctorsResponse {
   doctors: Doctor[];
+}
+
+// ── Billing and usage ────────────────────────────────────────────────────────
+
+export interface BillingSubscription {
+  id: string;
+  planKey: string;
+  status: string;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  trialEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
+  graceUntil: string | null;
+}
+
+export interface BillingUsageGroup {
+  metric: string;
+  clinicId: string | null;
+  clinicName: string | null;
+  currency: string | null;
+  quantity: string;
+  ratedAmountMinor: string | null;
+  eventCount: number;
+  unratedEventCount: number;
+}
+
+export interface TenantBudget {
+  id: string;
+  clinicId: string | null;
+  metric: string;
+  period: 'daily' | 'monthly' | 'billing_period';
+  currency: string | null;
+  softLimitQuantity: string | null;
+  hardLimitQuantity: string | null;
+  softLimitAmountMinor: string | null;
+  hardLimitAmountMinor: string | null;
+  enforcementMode: 'alert' | 'soft_block' | 'hard_block';
+  alertThresholds: number[];
+  effectiveAt: string;
+  expiresAt: string | null;
+}
+
+export interface BillingSummary {
+  organization: {
+    id: string;
+    status: string;
+    planKey: string;
+  };
+  billingAccount: {
+    provider: string;
+    status: string;
+    currency: string;
+  } | null;
+  subscription: BillingSubscription | null;
+  period: { start: string; end: string };
+  usage: BillingUsageGroup[];
+  estimate: {
+    kind: 'usage_only_unfinalized';
+    amounts: Array<{ currency: string; amountMinor: string }>;
+    excludesTaxesDiscountsAndBaseFees: boolean;
+  };
+  entitlements: Array<{
+    key: string;
+    enabled: boolean;
+    limit: string | null;
+    unit: string | null;
+    value: unknown;
+    effectiveAt: string;
+    expiresAt: string | null;
+  }>;
+  budgets: TenantBudget[];
+}
+
+export interface HostedBillingSession {
+  id: string;
+  url: string;
+}
+
+// ── Tenant provider integrations ────────────────────────────────────────────
+
+export type IntegrationProvider = 'vapi' | 'twilio';
+export type IntegrationStatus = 'provisioning' | 'active' | 'inactive';
+
+export interface ProviderResourceView {
+  id: string;
+  organizationId: string;
+  clinicId: string | null;
+  providerAccountId: string;
+  provider: IntegrationProvider;
+  resourceType: 'phone_number' | 'assistant' | 'messaging_service';
+  externalId: string;
+  displayName: string | null;
+  status: IntegrationStatus;
+  config: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderAccountView {
+  id: string;
+  organizationId: string;
+  provider: IntegrationProvider;
+  externalAccountId: string;
+  status: IntegrationStatus;
+  hasCredentials: boolean;
+  credentialSource: 'tenant' | 'platform';
+  config: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  resources: ProviderResourceView[];
+}
+
+export interface IntegrationsResponse {
+  accounts: ProviderAccountView[];
+}
+
+export interface IntegrationHealthItem {
+  id: string;
+  provider: string;
+  status: string;
+  configured: boolean;
+  issues: string[];
+  resourceType?: string;
+  clinicId?: string | null;
+}
+
+export interface IntegrationsHealthResponse {
+  scope: 'configuration_only';
+  organizationStatus: string | null;
+  healthy: boolean;
+  accounts: IntegrationHealthItem[];
+  resources: IntegrationHealthItem[];
 }
 
 export interface PaginatedResponse<T> {

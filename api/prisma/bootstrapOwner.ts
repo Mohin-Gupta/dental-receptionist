@@ -7,10 +7,10 @@ async function main() {
   const email = process.env.AUTH_BOOTSTRAP_EMAIL?.trim().toLowerCase();
   const password = process.env.AUTH_BOOTSTRAP_PASSWORD;
   const name = process.env.AUTH_BOOTSTRAP_NAME?.trim() || 'Clinic Owner';
-  const clinicId = process.env.AUTH_BOOTSTRAP_CLINIC_ID || process.env.DEFAULT_CLINIC_ID;
+  const clinicId = process.env.AUTH_BOOTSTRAP_CLINIC_ID;
 
   if (!email || !password || !clinicId) {
-    throw new Error('AUTH_BOOTSTRAP_EMAIL, AUTH_BOOTSTRAP_PASSWORD, and AUTH_BOOTSTRAP_CLINIC_ID or DEFAULT_CLINIC_ID are required');
+    throw new Error('AUTH_BOOTSTRAP_EMAIL, AUTH_BOOTSTRAP_PASSWORD, and AUTH_BOOTSTRAP_CLINIC_ID are required');
   }
 
   if (password.length < 12) {
@@ -34,6 +34,7 @@ async function main() {
       passwordHash,
       emailVerifiedAt: new Date(),
       status: 'active',
+      mfaRequired: true,
     },
     create: {
       email,
@@ -41,6 +42,7 @@ async function main() {
       passwordHash,
       emailVerifiedAt: new Date(),
       status: 'active',
+      mfaRequired: true,
     },
   });
 
@@ -53,7 +55,7 @@ async function main() {
   await prisma.clinicMembership.upsert({
     where: { userId_clinicId: { userId: user.id, clinicId } },
     update: { role: 'owner' },
-    create: { userId: user.id, clinicId, role: 'owner' },
+    create: { userId: user.id, organizationId: clinic.organizationId, clinicId, role: 'owner' },
   });
 
   console.log(`Owner ready: ${email} for clinic ${clinic.name}`);

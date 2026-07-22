@@ -25,67 +25,92 @@ export const reminderQueue = new Queue('reminders', { connection });
 
 export async function scheduleReminders(
   appointmentId: string,
-  patientPhone: string,
-  patientName: string,
-  clinicName: string,
-  startAt: Date
+  // Kept temporarily for source compatibility. PHI and timestamps supplied by
+  // callers are deliberately ignored; workers reload the appointment.
+  _patientPhone?: string,
+  _patientName?: string,
+  _clinicName?: string,
+  _startAt?: Date
 ): Promise<void> {
+  const appointment = await prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: {
+      id: true,
+      organizationId: true,
+      clinicId: true,
+      startAt: true,
+      status: true,
+    },
+  });
+  if (!appointment) throw new Error('Cannot schedule reminders for an unknown appointment');
+  if (!['scheduled', 'confirmed'].includes(appointment.status)) return;
+
   const now = Date.now();
-  const ms60min    = startAt.getTime() - 60 * 60 * 1000;
-  const msFeedback = startAt.getTime() + 60 * 60 * 1000;
+  const ms60min = appointment.startAt.getTime() - 60 * 60 * 1000;
+  const msFeedback = appointment.startAt.getTime() + 60 * 60 * 1000;
 
-  if (ms60min > now) {
-    const job = await reminderQueue.add(
-      '60min-reminder',
-      { appointmentId, patientPhone, patientName, clinicName, type: '60min' },
-      {
-        delay: ms60min - now,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 60000 },
-        jobId: `60min-${appointmentId}`,
-      }
-    );
+  const schedule = async (
+    type: '60min' | 'feedback',
+    channel: 'call' | 'sms',
+    scheduledAtMs: number,
+    attempts: number
+  ): Promise<void> => {
+    if (scheduledAtMs <= now) return;
 
-    await prisma.reminderJob.create({
-      data: {
-        appointmentId,
-        type: '60min',
-        channel: 'call',
-        bullJobId: job.id ?? undefined,
-        scheduledAt: new Date(ms60min),
+    const bullJobId = `${type}-${appointment.id}`;
+    const existing = await prisma.reminderJob.findUnique({
+      where: { bullJobId },
+      select: { status: true },
+    });
+    if (existing && ['sent', 'cancelled', 'skipped'].includes(existing.status)) return;
+
+    await prisma.reminderJob.upsert({
+      where: { bullJobId },
+      create: {
+        organizationId: appointment.organizationId,
+        clinicId: appointment.clinicId,
+        appointmentId: appointment.id,
+        type,
+        channel,
+        bullJobId,
+        scheduledAt: new Date(scheduledAtMs),
         status: 'pending',
+      },
+      update: {
+        scheduledAt: new Date(scheduledAtMs),
+        status: 'pending',
+        sentAt: null,
       },
     });
 
-    console.log(`60-min reminder scheduled ✓ fires at ${new Date(ms60min).toISOString()}`);
-  } else {
-    console.log('Appointment is within 60 minutes — skipping reminder job');
+    try {
+      await reminderQueue.add(
+        type === '60min' ? '60min-reminder' : 'feedback-sms',
+        { appointmentId: appointment.id, type },
+        {
+          delay: scheduledAtMs - now,
+          attempts,
+          backoff: { type: 'exponential', delay: 60_000 },
+          jobId: bullJobId,
+          removeOnComplete: { age: 7 * 24 * 60 * 60 },
+          removeOnFail: { age: 30 * 24 * 60 * 60 },
+        }
+      );
+    } catch (error) {
+      await prisma.reminderJob.update({
+        where: { bullJobId },
+        data: { status: 'schedule_failed' },
+      });
+      throw error;
+    }
+  };
+
+  if (ms60min > now) {
+    await schedule('60min', 'call', ms60min, 3);
   }
 
   if (msFeedback > now) {
-    const feedbackJob = await reminderQueue.add(
-      'feedback-sms',
-      { appointmentId, patientPhone, patientName, clinicName, type: 'feedback' },
-      {
-        delay: msFeedback - now,
-        attempts: 2,
-        backoff: { type: 'exponential', delay: 60000 },
-        jobId: `feedback-${appointmentId}`,
-      }
-    );
-
-    await prisma.reminderJob.create({
-      data: {
-        appointmentId,
-        type: 'feedback',
-        channel: 'sms',
-        bullJobId: feedbackJob.id ?? undefined,
-        scheduledAt: new Date(msFeedback),
-        status: 'pending',
-      },
-    });
-
-    console.log(`Feedback SMS scheduled ✓ fires at ${new Date(msFeedback).toISOString()}`);
+    await schedule('feedback', 'sms', msFeedback, 2);
   }
 }
 
@@ -93,19 +118,23 @@ export async function scheduleReminders(
 
 export async function cancelReminders(appointmentId: string): Promise<void> {
   try {
+    await prisma.reminderJob.updateMany({
+      where: {
+        appointmentId,
+        status: { in: ['pending', 'processing', 'failed', 'schedule_failed'] },
+      },
+      data: { status: 'cancelled' },
+    });
+
     const job60 = await reminderQueue.getJob(`60min-${appointmentId}`);
     if (job60) await job60.remove();
 
     const jobFeedback = await reminderQueue.getJob(`feedback-${appointmentId}`);
     if (jobFeedback) await jobFeedback.remove();
 
-    await prisma.reminderJob.updateMany({
-      where: { appointmentId, status: 'pending' },
-      data: { status: 'cancelled' },
-    });
-
-    console.log(`Reminders cancelled ✓ for ${appointmentId}`);
-  } catch (err: any) {
-    console.warn('Cancel reminders error:', err?.message);
+  } catch (error) {
+    // Cancellation is an important side effect. Propagate failure so the
+    // caller can retry instead of silently leaving a patient reminder active.
+    throw error;
   }
 }

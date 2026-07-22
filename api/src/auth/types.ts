@@ -2,11 +2,14 @@ export type AuthRole = 'owner' | 'admin' | 'staff' | 'viewer';
 
 export type Permission =
   | 'dashboard:read'
+  | 'phi:read'
   | 'appointments:write'
   | 'settings:read'
   | 'settings:write'
   | 'users:manage'
-  | 'integrations:manage';
+  | 'integrations:manage'
+  | 'billing:read'
+  | 'billing:write';
 
 export interface AuthMembership {
   clinicId: string;

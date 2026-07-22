@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import api, {
   Appointment,
   RescheduleResponse,
   formatDateTime,
+  createIdempotencyKey,
 } from '@/lib/api';
 
 import {
@@ -26,6 +27,7 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
   const [newTime, setNewTime] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const [minDate] = useState(
   () => new Date().toISOString().split('T')[0]
@@ -39,10 +41,20 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
     setLoading(true);
     setError('');
     try {
+      const payload = { newDate, newTime };
+      const fingerprint = JSON.stringify(payload);
+      if (pendingRequest.current?.fingerprint !== fingerprint) {
+        pendingRequest.current = {
+          fingerprint,
+          key: createIdempotencyKey(`dashboard-appointment-reschedule:${appointment.id}`),
+        };
+      }
       const res = await api.patch<RescheduleResponse>(
         `/dashboard/appointments/${appointment.id}/reschedule`,
-        { newDate, newTime }
+        payload,
+        { headers: { 'Idempotency-Key': pendingRequest.current.key } }
       );
+      pendingRequest.current = null;
       onSuccess(res.data.message);
       onClose();
     } catch (err) {

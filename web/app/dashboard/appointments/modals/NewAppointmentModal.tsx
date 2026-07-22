@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import api, {
   BookResponse,
@@ -8,6 +8,7 @@ import api, {
   AvailableSlotsResponse,
   Doctor,
   DoctorsResponse,
+  createIdempotencyKey,
 } from '@/lib/api';
 
 import {
@@ -41,6 +42,7 @@ export default function NewAppointmentModal({ onClose, onSuccess }: NewAppointme
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
 
   // Computed once per mount via useMemo, not directly during render — avoids
   // calling the impure Date.now()/new Date() during the render pass itself.
@@ -110,14 +112,25 @@ const { minDate, maxDate } = dateLimits;
     setError('');
 
     try {
-      const res = await api.post<BookResponse>('/dashboard/appointments', {
+      const payload = {
         patientName: patientName.trim(),
         patientPhone: patientPhone.trim(),
         doctorId: selectedDoctorId,
         date,
         time: selectedSlot,
         reason: reason.trim(),
+      };
+      const fingerprint = JSON.stringify(payload);
+      if (pendingRequest.current?.fingerprint !== fingerprint) {
+        pendingRequest.current = {
+          fingerprint,
+          key: createIdempotencyKey('dashboard-appointment-create'),
+        };
+      }
+      const res = await api.post<BookResponse>('/dashboard/appointments', payload, {
+        headers: { 'Idempotency-Key': pendingRequest.current.key },
       });
+      pendingRequest.current = null;
       onSuccess(res.data.message);
       onClose();
     } catch (err: unknown) {

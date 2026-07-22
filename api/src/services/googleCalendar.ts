@@ -6,6 +6,12 @@ import {
   parseInTimezone,
   isTodayInTimezone,
 } from '../lib/timezone';
+import { decryptSecret, encryptSecret } from '../auth/secretBox';
+import crypto from 'crypto';
+
+function calendarSecretPurpose(organizationId: string, ownerId: string): string {
+  return `calendar:${organizationId}:${ownerId}`;
+}
 
 // ── Legacy export aliases (kept for any remaining call sites) ────────────────
 export function toISTString(year: number, month: number, day: number, hour: number, minute: number): string {
@@ -26,13 +32,13 @@ function getOAuthClient() {
   );
 }
 
-export function getAuthUrl(clinicId: string): string {
+export function getAuthUrl(state: string): string {
   const oauth2Client = getOAuthClient();
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar'],
-    state: clinicId,
+    state,
   });
 }
 
@@ -40,17 +46,40 @@ export async function handleOAuthCallback(code: string, clinicId: string, doctor
   const oauth2Client = getOAuthClient();
   const { tokens } = await oauth2Client.getToken(code);
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  await prisma.calendarConnection.create({
-    data: {
+  if (doctorId) {
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        id: doctorId,
+        organizationId: clinic.organizationId,
+        clinics: { some: { clinicId } },
+      },
+      select: { id: true },
+    });
+    if (!doctor) throw new Error('Doctor does not belong to this clinic');
+  }
+  const ownerId = doctorId ?? clinicId;
+  await prisma.$transaction(async tx => {
+    await tx.calendarConnection.deleteMany({
+      where: {
+        organizationId: clinic.organizationId,
+        scope: doctorId ? 'doctor' : 'clinic',
+        ...(doctorId ? { doctorId } : { clinicId }),
+      },
+    });
+    await tx.calendarConnection.create({
+      data: {
       organizationId: clinic.organizationId,
       clinicId: doctorId ? null : clinicId,
       doctorId,
       scope: doctorId ? 'doctor' : 'clinic',
       googleCalendarId: clinic.googleCalendarId,
-      googleTokens: JSON.stringify(tokens),
-    },
+      googleTokens: encryptSecret(
+        JSON.stringify(tokens),
+        calendarSecretPurpose(clinic.organizationId, ownerId)
+      ),
+      },
+    });
   });
-  console.log('Google Calendar connected for:', doctorId ? `doctor ${doctorId}` : `clinic ${clinicId}`);
   return tokens;
 }
 
@@ -59,12 +88,12 @@ async function getAuthenticatedClient(clinicId: string, doctorId?: string) {
   const connection =
     (doctorId
       ? await prisma.calendarConnection.findFirst({
-          where: { doctorId, scope: 'doctor' },
+          where: { doctorId, organizationId: clinic.organizationId, scope: 'doctor' },
           orderBy: { createdAt: 'desc' },
         })
       : null) ??
     (await prisma.calendarConnection.findFirst({
-      where: { clinicId, scope: 'clinic' },
+      where: { clinicId, organizationId: clinic.organizationId, scope: 'clinic' },
       orderBy: { createdAt: 'desc' },
     }));
 
@@ -72,7 +101,10 @@ async function getAuthenticatedClient(clinicId: string, doctorId?: string) {
   if (!rawTokens) throw new Error('Google Calendar not connected');
 
   const oauth2Client = getOAuthClient();
-  const tokens = JSON.parse(rawTokens);
+  const ownerId = connection?.doctorId ?? connection?.clinicId ?? clinicId;
+  const tokens = JSON.parse(
+    decryptSecret(rawTokens, calendarSecretPurpose(clinic.organizationId, ownerId))
+  );
   oauth2Client.setCredentials(tokens);
 
   oauth2Client.on('tokens', async (newTokens) => {
@@ -80,12 +112,22 @@ async function getAuthenticatedClient(clinicId: string, doctorId?: string) {
     if (connection) {
       await prisma.calendarConnection.update({
         where: { id: connection.id },
-        data: { googleTokens: JSON.stringify(merged) },
+        data: {
+          googleTokens: encryptSecret(
+            JSON.stringify(merged),
+            calendarSecretPurpose(clinic.organizationId, ownerId)
+          ),
+        },
       });
     } else {
       await prisma.clinic.update({
         where: { id: clinicId },
-        data: { googleTokens: JSON.stringify(merged) },
+        data: {
+          googleTokens: encryptSecret(
+            JSON.stringify(merged),
+            calendarSecretPurpose(clinic.organizationId, clinicId)
+          ),
+        },
       });
     }
   });
@@ -115,12 +157,11 @@ export async function getAvailableSlots(
   const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
   const dayName = dayNames[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
 
-  console.log(`Day for ${dateStr}: ${dayName}`);
-
   const doctorAvailability = doctorId
     ? await prisma.doctorAvailability.findFirst({
         where: {
           doctorId,
+          organizationId: clinic.organizationId,
           dayOfWeek: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
           OR: [{ clinicId }, { clinicId: null }],
         },
@@ -132,7 +173,6 @@ export async function getAvailableSlots(
     ? { open: doctorAvailability.open, close: doctorAvailability.close }
     : businessHours[dayName];
   if (!hours) {
-    console.log(`Clinic closed on ${dayName}`);
     return [];
   }
 
@@ -165,15 +205,18 @@ export async function getAvailableSlots(
 
     // If the (clamped, rounded) start time is already past closing, no slots today
     if (startHour * 60 + startMin >= closeHour * 60 + closeMin) {
-      console.log('No more slots today — all slots have passed or clinic is closed');
       return [];
     }
   }
 
-  const dayStartStr = toClinicTimeString(year, month, day, startHour, startMin, timezone);
-  const dayEndStr   = toClinicTimeString(year, month, day, closeHour, closeMin, timezone);
-
-  console.log(`Querying freebusy: ${dayStartStr} → ${dayEndStr}`);
+  let dayStartStr: string;
+  let dayEndStr: string;
+  try {
+    dayStartStr = toClinicTimeString(year, month, day, startHour, startMin, timezone);
+    dayEndStr = toClinicTimeString(year, month, day, closeHour, closeMin, timezone);
+  } catch {
+    return [];
+  }
 
   const freeBusy = await calendar.freebusy.query({
     requestBody: {
@@ -187,8 +230,6 @@ export async function getAvailableSlots(
   const busySlots =
     freeBusy.data.calendars?.[calendarId]?.busy ?? [];
 
-  console.log('Busy slots:', JSON.stringify(busySlots));
-
   const slots: { start: string; end: string; label: string }[] = [];
   const SLOT_MINUTES = 30;
 
@@ -196,7 +237,15 @@ export async function getAvailableSlots(
   let curMin = startMin;
 
   while (curHour * 60 + curMin + SLOT_MINUTES <= closeHour * 60 + closeMin) {
-    const slotStartStr = toClinicTimeString(year, month, day, curHour, curMin, timezone);
+    let slotStartStr: string;
+    try {
+      slotStartStr = toClinicTimeString(year, month, day, curHour, curMin, timezone);
+    } catch {
+      const totalMin = curHour * 60 + curMin + SLOT_MINUTES;
+      curHour = Math.floor(totalMin / 60);
+      curMin = totalMin % 60;
+      continue;
+    }
     const slotEndStr   = addMinutesToClinicString(slotStartStr, SLOT_MINUTES, timezone);
 
     const slotStartMs = new Date(slotStartStr).getTime();
@@ -233,7 +282,6 @@ export async function getAvailableSlots(
     curMin  = totalMin % 60;
   }
 
-  console.log(`Available slots (${timezone}):`, slots);
   return slots;
 }
 
@@ -241,31 +289,56 @@ export async function getAvailableSlots(
 
 export async function createCalendarEvent(
   clinicId: string,
-    appointment: {
+  appointment: {
     doctorId?: string;
     patientName: string;
     patientPhone: string;
     reason: string;
     startAt: string;
     endAt: string;
+    /** Stable operation key used to derive a Google event ID. */
+    idempotencyKey?: string;
+    /** Non-PHI internal reference displayed when calendar PHI is disabled. */
+    appointmentReference?: string;
   }
 ): Promise<string> {
   const { oauth2Client, clinic, calendarId } = await getAuthenticatedClient(clinicId, appointment.doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
 
-  const event = await calendar.events.insert({
-    calendarId,
-    requestBody: {
-      summary: `${appointment.patientName} — ${appointment.reason}`,
-      description: `Patient phone: ${appointment.patientPhone}\nBooked by Maya (AI Receptionist)`,
-      start: { dateTime: appointment.startAt, timeZone: timezone },
-      end:   { dateTime: appointment.endAt,   timeZone: timezone },
-    },
-  });
-
-  console.log('Event created:', event.data.id, 'at', event.data.start?.dateTime);
-  return event.data.id!;
+  const allowPhi =
+    process.env.GOOGLE_CALENDAR_STORE_PHI === 'true' &&
+    process.env.GOOGLE_WORKSPACE_BAA_CONFIRMED === 'true';
+  const eventId = appointment.idempotencyKey
+    ? `a${crypto.createHash('sha256').update(appointment.idempotencyKey).digest('hex').slice(0, 40)}`
+    : undefined;
+  try {
+    const event = await calendar.events.insert({
+      calendarId,
+      requestBody: {
+        ...(eventId ? { id: eventId } : {}),
+        summary: allowPhi
+          ? `${appointment.patientName} — ${appointment.reason}`
+          : 'Dental appointment',
+        description: allowPhi
+          ? `Patient phone: ${appointment.patientPhone}`
+          : `Managed by the receptionist platform${
+              appointment.appointmentReference
+                ? `\nInternal reference: ${appointment.appointmentReference}`
+                : ''
+            }`,
+        start: { dateTime: appointment.startAt, timeZone: timezone },
+        end: { dateTime: appointment.endAt, timeZone: timezone },
+      },
+    });
+    if (!event.data.id) throw new Error('Google Calendar did not return an event ID');
+    return event.data.id;
+  } catch (error) {
+    const status = (error as { code?: number | string; response?: { status?: number } })?.response?.status ??
+      (error as { code?: number | string })?.code;
+    if (eventId && (status === 409 || status === '409')) return eventId;
+    throw error;
+  }
 }
 
 export async function deleteCalendarEvent(
@@ -281,7 +354,6 @@ export async function deleteCalendarEvent(
     eventId: googleEventId,
   });
 
-  console.log('Event deleted:', googleEventId);
 }
 
 export async function updateCalendarEvent(
@@ -298,10 +370,15 @@ export async function updateCalendarEvent(
   const { oauth2Client, clinic, calendarId } = await getAuthenticatedClient(clinicId, update.doctorId);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timezone = clinic.timezone ?? 'Asia/Kolkata';
+  const allowPhi =
+    process.env.GOOGLE_CALENDAR_STORE_PHI === 'true' &&
+    process.env.GOOGLE_WORKSPACE_BAA_CONFIRMED === 'true';
 
   const patch: Record<string, unknown> = {};
   if (update.patientName || update.reason) {
-    patch.summary = `${update.patientName ?? ''} — ${update.reason ?? ''}`.trim();
+    patch.summary = allowPhi
+      ? `${update.patientName ?? ''} — ${update.reason ?? ''}`.trim()
+      : 'Dental appointment';
   }
   if (update.startAt) patch.start = { dateTime: update.startAt, timeZone: timezone };
   if (update.endAt)   patch.end   = { dateTime: update.endAt,   timeZone: timezone };
@@ -312,5 +389,4 @@ export async function updateCalendarEvent(
     requestBody: patch,
   });
 
-  console.log('Event updated:', googleEventId);
 }

@@ -8,65 +8,104 @@ datasource db {
 }
 
 model Clinic {
-  id               String   @id @default(uuid())
-  organizationId   String
-  name             String
-  phone            String
-  timezone         String   @default("UTC")
-  googleCalendarId String?
-  googleTokens     String?
-  businessHours    Json
+  id                 String    @id @default(uuid())
+  organizationId     String
+  name               String
+  phone              String
+  timezone           String    @default("UTC")
+  countryCode        String    @default("IN")
+  defaultCallingCode String    @default("91")
+  locale             String    @default("en-IN")
+  status             String    @default("active")
+  archivedAt         DateTime?
+  googleCalendarId   String?
+  googleTokens       String?
+  businessHours      Json
   lastAgendaSentDate String?
 
-  clinicAddress     String?
-  clinicEmail       String?
-  clinicWebsite     String?
-  clinicServices    Json?   // array of services offered
-  clinicAbout       String? // short description
+  clinicAddress  String?
+  clinicEmail    String?
+  clinicWebsite  String?
+  clinicServices Json? // array of services offered
+  clinicAbout    String? // short description
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  patients     Patient[]
-  appointments Appointment[]
-  callLogs     CallLog[]
-  memberships  ClinicMembership[]
-  inviteTokens InviteToken[]
-  auditLogs    AuditLog[]
-  securityEvents SecurityEvent[]
-  doctors      DoctorClinic[]
-  doctorAvailabilities DoctorAvailability[]
-  calendarConnections CalendarConnection[]
+  organization             Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patients                 Patient[]
+  appointments             Appointment[]
+  callLogs                 CallLog[]
+  memberships              ClinicMembership[]
+  inviteTokens             InviteToken[]
+  auditLogs                AuditLog[]
+  securityEvents           SecurityEvent[]
+  doctors                  DoctorClinic[]
+  doctorAvailabilities     DoctorAvailability[]
+  calendarConnections      CalendarConnection[]
+  reminderJobs             ReminderJob[]
+  providerResources        ProviderResource[]
+  communicationAttempts    CommunicationAttempt[]
+  communicationPreferences CommunicationPreference[]
+  usageEvents              UsageEvent[]
+  providerCostEntries      ProviderCostEntry[]
+  tenantBudgets            TenantBudget[]
+  budgetAlertDeliveries    BudgetAlertDelivery[]
+  outboxEvents             OutboxEvent[]
   // escalations  Escalation[]
   // callbacks    Callback[]
 
   @@unique([organizationId, phone])
+  @@unique([id, organizationId])
   @@index([organizationId])
+  @@index([organizationId, status])
 }
 
 model Organization {
-  id             String   @id @default(uuid())
-  name           String
-  phone          String?
-  email          String?
-  website        String?
-  about          String?
-  services       Json?
-  planTier       String   @default("starter")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id         String   @id @default(uuid())
+  name       String
+  phone      String?
+  email      String?
+  website    String?
+  about      String?
+  services   Json?
+  planTier   String   @default("starter")
+  status     String   @default("provisioning")
+  dataRegion String   @default("IN")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  clinics        Clinic[]
-  patients       Patient[]
-  appointments   Appointment[]
-  callLogs       CallLog[]
-  memberships    OrganizationMembership[]
-  doctors        Doctor[]
-  inviteTokens   InviteToken[]
-  auditLogs      AuditLog[]
-  securityEvents SecurityEvent[]
-  calendarConnections CalendarConnection[]
+  clinics                  Clinic[]
+  patients                 Patient[]
+  appointments             Appointment[]
+  callLogs                 CallLog[]
+  memberships              OrganizationMembership[]
+  clinicMemberships        ClinicMembership[]
+  doctors                  Doctor[]
+  doctorClinics            DoctorClinic[]
+  doctorAvailabilities     DoctorAvailability[]
+  inviteTokens             InviteToken[]
+  reminderJobs             ReminderJob[]
+  auditLogs                AuditLog[]
+  securityEvents           SecurityEvent[]
+  calendarConnections      CalendarConnection[]
+  providerAccounts         ProviderAccount[]
+  providerResources        ProviderResource[]
+  communicationAttempts    CommunicationAttempt[]
+  communicationPreferences CommunicationPreference[]
+  providerWebhookEvents    ProviderWebhookEvent[]
+  usageEvents              UsageEvent[]
+  providerCostEntries      ProviderCostEntry[]
+  billingAccount           BillingAccount?
+  billingCheckoutSessions  BillingCheckoutSession[]
+  subscriptions            SubscriptionMirror[]
+  entitlements             Entitlement[]
+  tenantBudgets            TenantBudget[]
+  budgetAlertDeliveries    BudgetAlertDelivery[]
+  budgetAlertIssues        BudgetAlertEvaluationIssue[]
+  usageExports             UsageExport[]
+  outboxEvents             OutboxEvent[]
+  reconciliationRuns       ReconciliationRun[]
 }
 
 model User {
@@ -92,6 +131,7 @@ model User {
   doctorProfiles          Doctor[]
   auditLogs               AuditLog[]
   securityEvents          SecurityEvent[]
+  budgetAlertDeliveries   BudgetAlertDelivery[]
 }
 
 model OrganizationMembership {
@@ -110,17 +150,20 @@ model OrganizationMembership {
 }
 
 model ClinicMembership {
-  id        String   @id @default(uuid())
-  userId    String
-  clinicId  String
-  role      String   @default("staff")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  clinicId       String
+  role           String   @default("staff")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic       @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
 
   @@unique([userId, clinicId])
+  @@index([organizationId, userId])
   @@index([clinicId, role])
 }
 
@@ -129,6 +172,7 @@ model Session {
   userId        String
   tokenHash     String    @unique
   csrfTokenHash String?
+  mfaVerifiedAt DateTime?
   expiresAt     DateTime
   lastSeenAt    DateTime  @default(now())
   revokedAt     DateTime?
@@ -142,23 +186,23 @@ model Session {
 }
 
 model InviteToken {
-  id           String    @id @default(uuid())
-  organizationId String
-  clinicId     String?
-  email        String
+  id               String    @id @default(uuid())
+  organizationId   String
+  clinicId         String?
+  email            String
   organizationRole String?
-  clinicRole   String?
-  tokenHash    String    @unique
-  expiresAt    DateTime
-  acceptedAt   DateTime?
-  createdById  String?
-  acceptedById String?
-  createdAt    DateTime  @default(now())
+  clinicRole       String?
+  tokenHash        String    @unique
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  createdById      String?
+  acceptedById     String?
+  createdAt        DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  clinic     Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  createdBy  User?  @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  acceptedBy User?  @relation("InviteAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy    User?        @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedBy   User?        @relation("InviteAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId, email])
   @@index([clinicId, email])
@@ -178,59 +222,65 @@ model Doctor {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
-  clinics      DoctorClinic[]
-  availabilities DoctorAvailability[]
-  appointments Appointment[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user                User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clinics             DoctorClinic[]
+  availabilities      DoctorAvailability[]
+  appointments        Appointment[]
   calendarConnections CalendarConnection[]
 
+  @@unique([id, organizationId])
   @@index([organizationId, status])
 }
 
 model DoctorClinic {
-  id        String   @id @default(uuid())
-  doctorId  String
-  clinicId  String
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  organizationId String
+  doctorId       String
+  clinicId       String
+  createdAt      DateTime @default(now())
 
-  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  doctor       Doctor       @relation(fields: [doctorId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  clinic       Clinic       @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
 
   @@unique([doctorId, clinicId])
-  @@index([clinicId])
+  @@unique([organizationId, doctorId, clinicId])
+  @@index([organizationId, clinicId])
 }
 
 model DoctorAvailability {
-  id        String   @id @default(uuid())
-  doctorId  String
-  clinicId  String?
-  dayOfWeek Int
-  open      String
-  close     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-
-  @@index([doctorId, clinicId, dayOfWeek])
-}
-
-model CalendarConnection {
   id             String   @id @default(uuid())
   organizationId String
+  doctorId       String
   clinicId       String?
-  doctorId       String?
-  scope          String
-  googleCalendarId String?
-  googleTokens   String
+  dayOfWeek      Int
+  open           String
+  close          String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  clinic       Clinic?      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  doctor       Doctor?      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctor       Doctor       @relation(fields: [doctorId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@index([organizationId, doctorId, clinicId, dayOfWeek], map: "DoctorAvailability_tenant_doctor_clinic_day_idx")
+}
+
+model CalendarConnection {
+  id               String   @id @default(uuid())
+  organizationId   String
+  clinicId         String?
+  doctorId         String?
+  scope            String
+  googleCalendarId String?
+  googleTokens     String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  doctor       Doctor?      @relation(fields: [doctorId, organizationId], references: [id, organizationId], onDelete: Cascade)
 
   @@index([organizationId, scope])
   @@index([clinicId])
@@ -263,6 +313,26 @@ model PasswordResetToken {
   @@index([userId, expiresAt])
 }
 
+/// Durable replay protection for unauthenticated self-service tenant creation.
+/// Only hashes and result identifiers are retained; request bodies and
+/// passwords are never stored in this record.
+model OrganizationRegistrationRequest {
+  id                         String    @id @default(uuid())
+  idempotencyKeyHash         String    @unique
+  requestHash                String
+  status                     String    @default("processing")
+  userId                     String?
+  organizationId             String?
+  clinicId                   String?
+  verificationDeliveryStatus String    @default("pending")
+  completedAt                DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([organizationId])
+}
+
 model MfaMethod {
   id            String    @id @default(uuid())
   userId        String
@@ -274,25 +344,25 @@ model MfaMethod {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, type])
+  @@unique([userId, type])
 }
 
 model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String?
+  id             String   @id @default(uuid())
+  userId         String?
   organizationId String?
-  clinicId   String?
-  action     String
-  targetType String?
-  targetId   String?
-  ipAddress  String?
-  userAgent  String?
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  clinicId       String?
+  action         String
+  targetType     String?
+  targetId       String?
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
 
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
   @@index([clinicId, createdAt])
@@ -300,89 +370,107 @@ model AuditLog {
 }
 
 model SecurityEvent {
-  id        String   @id @default(uuid())
-  userId    String?
+  id             String   @id @default(uuid())
+  userId         String?
   organizationId String?
-  clinicId  String?
-  type      String
-  ipAddress String?
-  userAgent String?
-  metadata  Json?
-  createdAt DateTime @default(now())
+  clinicId       String?
+  type           String
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
 
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: SetNull)
 
   @@index([type, createdAt])
   @@index([userId, createdAt])
 }
 
 model Patient {
-  id        String   @id @default(uuid())
+  id             String   @id @default(uuid())
   organizationId String
-  clinicId  String
-  name      String
-  phone     String
-  email     String?
-  createdAt DateTime @default(now())
+  clinicId       String
+  name           String
+  phone          String
+  email          String?
+  createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  appointments Appointment[]
-  callLogs     CallLog[]
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic                Clinic                 @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  appointments          Appointment[]
+  callLogs              CallLog[]
+  communicationAttempts CommunicationAttempt[]
 
   @@unique([organizationId, phone])
+  @@unique([id, organizationId])
   @@index([clinicId])
 }
 
 model Appointment {
-  id            String   @id @default(uuid())
-  organizationId String
-  clinicId      String
-  doctorId      String
-  patientId     String
-  reason        String
-  startAt       DateTime
-  endAt         DateTime
-  status        String   @default("scheduled")
-  googleEventId String?
+  id                      String   @id @default(uuid())
+  organizationId          String
+  clinicId                String
+  doctorId                String
+  patientId               String
+  reason                  String
+  startAt                 DateTime @db.Timestamptz(3)
+  endAt                   DateTime @db.Timestamptz(3)
+  status                  String   @default("scheduled")
+  googleEventId           String?
+  version                 Int      @default(1)
+  idempotencyKey          String?  @unique
+  supersedesAppointmentId String?
+  calendarSyncStatus      String   @default("pending")
   // confirmed     Boolean  @default(false)
-  createdAt     DateTime @default(now())
+  createdAt               DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  doctor       Doctor        @relation(fields: [doctorId], references: [id])
-  patient      Patient       @relation(fields: [patientId], references: [id])
-  callLogs     CallLog[]
-  reminderJobs ReminderJob[]
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic                Clinic                 @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  doctor                Doctor                 @relation(fields: [doctorId, organizationId], references: [id, organizationId])
+  patient               Patient                @relation(fields: [patientId, organizationId], references: [id, organizationId])
+  callLogs              CallLog[]
+  reminderJobs          ReminderJob[]
+  communicationAttempts CommunicationAttempt[]
+  supersedes            Appointment?           @relation("AppointmentSupersession", fields: [supersedesAppointmentId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  supersededBy          Appointment[]          @relation("AppointmentSupersession")
   // callbacks    Callback[]
 
+  @@unique([id, organizationId])
+  @@unique([id, organizationId, clinicId])
   @@index([organizationId, startAt])
   @@index([clinicId, startAt])
   @@index([doctorId, startAt])
 }
 
 model CallLog {
-  id              String   @id @default(uuid())
-  phoneNumber     String?
-  organizationId  String
-  clinicId        String
-  patientId       String?
-  appointmentId   String?
-  vapiCallId      String   @unique
-  direction       String   @default("inbound")
-  durationSecs    Int?
+  id                 String    @id @default(uuid())
+  phoneNumber        String?
+  organizationId     String
+  clinicId           String
+  patientId          String?
+  appointmentId      String?
+  vapiCallId         String    @unique
+  direction          String    @default("inbound")
+  durationSecs       Int?
   // confidenceScore Float?
-  transcript      Json?
-  outcome         String?
-  createdAt       DateTime @default(now())
+  transcript         Json?
+  transcriptPurgedAt DateTime?
+  outcome            String?
+  createdAt          DateTime  @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  clinic      Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patient     Patient?     @relation(fields: [patientId], references: [id])
-  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic                Clinic                 @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  patient               Patient?               @relation(fields: [patientId, organizationId], references: [id, organizationId])
+  appointment           Appointment?           @relation(fields: [appointmentId, organizationId, clinicId], references: [id, organizationId, clinicId])
+  communicationAttempts CommunicationAttempt[]
   // escalation  Escalation?
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([clinicId, createdAt])
+  @@index([transcriptPurgedAt, createdAt])
 }
 
 // model Escalation {
@@ -415,15 +503,595 @@ model CallLog {
 // }
 
 model ReminderJob {
-  id            String    @id @default(uuid())
-  appointmentId String
-  type          String
-  channel       String    @default("sms")
-  bullJobId     String?   @unique
-  status        String    @default("pending")
-  scheduledAt   DateTime
-  sentAt        DateTime?
-  createdAt     DateTime  @default(now())
+  id             String    @id @default(uuid())
+  organizationId String
+  clinicId       String
+  appointmentId  String
+  type           String
+  channel        String    @default("sms")
+  bullJobId      String?   @unique
+  status         String    @default("pending")
+  scheduledAt    DateTime
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
 
-  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic       @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  appointment  Appointment  @relation(fields: [appointmentId, organizationId, clinicId], references: [id, organizationId, clinicId], onDelete: Cascade)
+
+  @@index([organizationId, status, scheduledAt])
+  @@index([clinicId, scheduledAt])
+}
+
+/// A tenant-owned account at an external communications provider. Credentials
+/// must be encrypted before they are stored in credentialsEncrypted.
+model ProviderAccount {
+  id                   String   @id @default(uuid())
+  organizationId       String
+  provider             String
+  externalAccountId    String
+  status               String   @default("provisioning")
+  credentialsEncrypted String?
+  credentialKeyVersion String?
+  config               Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  resources     ProviderResource[]
+  webhookEvents ProviderWebhookEvent[]
+
+  @@unique([organizationId, provider])
+  @@unique([provider, externalAccountId])
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+}
+
+/// Maps a trusted provider identifier (for example, a Vapi phoneNumberId) to
+/// its owning organization and, where applicable, clinic.
+model ProviderResource {
+  id                String   @id @default(uuid())
+  organizationId    String
+  clinicId          String?
+  providerAccountId String
+  provider          String
+  resourceType      String
+  externalId        String
+  displayName       String?
+  status            String   @default("provisioning")
+  config            Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic                Clinic?                @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  providerAccount       ProviderAccount        @relation(fields: [providerAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  communicationAttempts CommunicationAttempt[]
+  webhookEvents         ProviderWebhookEvent[]
+  usageEvents           UsageEvent[]
+  providerCostEntries   ProviderCostEntry[]
+
+  @@unique([provider, resourceType, externalId])
+  @@unique([id, organizationId])
+  @@index([organizationId, clinicId, status])
+  @@index([providerAccountId, resourceType])
+}
+
+/// One lifecycle record for a call, SMS, email, or similar external action.
+model CommunicationAttempt {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  clinicId           String?
+  providerResourceId String?
+  patientId          String?
+  appointmentId      String?
+  callLogId          String?
+  provider           String
+  channel            String
+  direction          String
+  externalId         String?
+  idempotencyKey     String
+  status             String    @default("pending")
+  destination        String?
+  origin             String?
+  durationSeconds    Int?
+  segmentCount       Int?
+  request            Json?
+  response           Json?
+  payloadPurgedAt    DateTime?
+  errorCode          String?
+  errorMessage       String?
+  startedAt          DateTime?
+  endedAt            DateTime?
+  usageFinalizedAt   DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization        Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic              Clinic?                @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  providerResource    ProviderResource?      @relation(fields: [providerResourceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  patient             Patient?               @relation(fields: [patientId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  appointment         Appointment?           @relation(fields: [appointmentId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  callLog             CallLog?               @relation(fields: [callLogId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  webhookEvents       ProviderWebhookEvent[]
+  usageEvents         UsageEvent[]
+  providerCostEntries ProviderCostEntry[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([provider, externalId])
+  @@unique([id, organizationId])
+  @@index([organizationId, clinicId, channel, createdAt], map: "CommunicationAttempt_tenant_channel_createdAt_idx")
+  @@index([organizationId, status, createdAt])
+  @@index([provider, channel, updatedAt], map: "CommunicationAttempt_provider_channel_updatedAt_idx")
+  @@index([payloadPurgedAt, createdAt])
+  @@index([usageFinalizedAt, updatedAt])
+}
+
+/// Organization-wide suppression/consent state keyed by a non-reversible,
+/// secret HMAC of the normalized destination. Opt-outs intentionally outlive
+/// transient message payload retention.
+model CommunicationPreference {
+  id                  String   @id @default(uuid())
+  organizationId      String
+  clinicId            String?
+  channel             String
+  addressHash         String
+  status              String
+  source              String
+  lastProviderEventId String?
+  effectiveAt         DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: NoAction)
+
+  @@unique([organizationId, channel, addressHash])
+  @@index([organizationId, channel, status])
+  @@index([clinicId, updatedAt])
+}
+
+/// Durable inbox for signed provider webhooks. organizationId is nullable so
+/// an invalid or not-yet-resolved event can still be retained and investigated.
+model ProviderWebhookEvent {
+  id                     String    @id @default(uuid())
+  organizationId         String?
+  providerAccountId      String?
+  providerResourceId     String?
+  communicationAttemptId String?
+  provider               String
+  externalEventId        String?
+  idempotencyKey         String
+  eventType              String
+  signatureValid         Boolean   @default(false)
+  payload                Json
+  headers                Json?
+  response               Json?
+  status                 String    @default("received")
+  processingAttempts     Int       @default(0)
+  processingStartedAt    DateTime?
+  lastError              String?
+  receivedAt             DateTime  @default(now())
+  processedAt            DateTime?
+  payloadPurgedAt        DateTime?
+
+  organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  providerAccount      ProviderAccount?      @relation(fields: [providerAccountId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  providerResource     ProviderResource?     @relation(fields: [providerResourceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  communicationAttempt CommunicationAttempt? @relation(fields: [communicationAttemptId, organizationId], references: [id, organizationId], onDelete: NoAction)
+
+  @@unique([provider, idempotencyKey])
+  @@index([provider, externalEventId])
+  @@index([status, processingStartedAt, receivedAt])
+  @@index([organizationId, receivedAt])
+  @@index([payloadPurgedAt, receivedAt])
+}
+
+/// Append-only customer-facing billable usage. Corrections are represented by
+/// a new row referencing correctionOfId rather than mutating a settled event.
+model UsageEvent {
+  id                     String   @id @default(uuid())
+  organizationId         String
+  clinicId               String?
+  providerResourceId     String?
+  communicationAttemptId String?
+  priceVersionId         String?
+  correctionOfId         String?
+  metric                 String
+  quantity               Decimal  @db.Decimal(20, 6)
+  unit                   String
+  source                 String
+  externalEventId        String?
+  idempotencyKey         String
+  occurredAt             DateTime
+  ratedAmountMinor       BigInt?
+  ratedAmountSubminor    Decimal? @db.Decimal(38, 12)
+  currency               String?
+  status                 String   @default("pending")
+  metadata               Json?
+  createdAt              DateTime @default(now())
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic               Clinic?               @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  providerResource     ProviderResource?     @relation(fields: [providerResourceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  communicationAttempt CommunicationAttempt? @relation(fields: [communicationAttemptId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  priceVersion         PriceVersion?         @relation(fields: [priceVersionId], references: [id], onDelete: SetNull)
+  correctionOf         UsageEvent?           @relation("UsageCorrections", fields: [correctionOfId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  corrections          UsageEvent[]          @relation("UsageCorrections")
+  costEntries          ProviderCostEntry[]
+  exports              UsageExport[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([id, organizationId])
+  @@index([organizationId, metric, occurredAt])
+  @@index([organizationId, status, occurredAt])
+  @@index([providerResourceId, occurredAt])
+  @@index([communicationAttemptId, metric], map: "UsageEvent_attempt_metric_idx")
+}
+
+/// Append-only actual vendor/internal cost, kept separate from retail usage.
+model ProviderCostEntry {
+  id                     String   @id @default(uuid())
+  organizationId         String
+  clinicId               String?
+  providerResourceId     String?
+  communicationAttemptId String?
+  usageEventId           String?
+  reconciliationRunId    String?
+  correctionOfId         String?
+  provider               String
+  costType               String
+  quantity               Decimal? @db.Decimal(20, 6)
+  unit                   String?
+  amountMicros           BigInt
+  currency               String
+  externalEventId        String?
+  idempotencyKey         String
+  occurredAt             DateTime
+  metadata               Json?
+  createdAt              DateTime @default(now())
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic               Clinic?               @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  providerResource     ProviderResource?     @relation(fields: [providerResourceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  communicationAttempt CommunicationAttempt? @relation(fields: [communicationAttemptId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  usageEvent           UsageEvent?           @relation(fields: [usageEventId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  reconciliationRun    ReconciliationRun?    @relation(fields: [reconciliationRunId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  correctionOf         ProviderCostEntry?    @relation("ProviderCostCorrections", fields: [correctionOfId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  corrections          ProviderCostEntry[]   @relation("ProviderCostCorrections")
+
+  @@unique([provider, idempotencyKey])
+  @@unique([id, organizationId])
+  @@index([organizationId, provider, occurredAt])
+  @@index([organizationId, costType, occurredAt])
+  @@index([communicationAttemptId, provider, costType], map: "ProviderCostEntry_attempt_provider_costType_idx")
+  @@index([correctionOfId])
+}
+
+/// Immutable commercial rate definition. New prices create a new version.
+model PriceVersion {
+  id              String    @id @default(uuid())
+  planKey         String
+  metric          String
+  version         String
+  currency        String
+  unitAmountMinor BigInt
+  unitQuantity    Decimal   @default(1) @db.Decimal(20, 6)
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  status          String    @default("active")
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+
+  usageEvents UsageEvent[]
+
+  @@unique([planKey, metric, version, currency])
+  @@index([planKey, metric, effectiveFrom])
+}
+
+model BillingAccount {
+  id                 String   @id @default(uuid())
+  organizationId     String   @unique
+  billingProvider    String
+  externalCustomerId String
+  status             String   @default("pending")
+  billingEmail       String?
+  currency           String   @default("INR")
+  taxIds             Json?
+  billingAddress     Json?
+  metadata           Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization     Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscriptions    SubscriptionMirror[]
+  checkoutSessions BillingCheckoutSession[]
+
+  @@unique([billingProvider, externalCustomerId])
+  @@unique([id, organizationId])
+  @@index([status])
+}
+
+/// Durable, tenant-scoped state for hosted subscription checkout. The activeKey
+/// unique constraint makes Checkout single-flight even when callers use different
+/// HTTP idempotency keys before a Stripe webhook has projected the subscription.
+model BillingCheckoutSession {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  billingAccountId     String
+  billingProvider      String
+  requestKeyHash       String
+  planKey              String
+  status               String    @default("creating")
+  activeKey            String?
+  externalSessionId    String?
+  sessionUrlCiphertext String?
+  expiresAt            DateTime
+  completedAt          DateTime?
+  lastError            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([billingProvider, externalSessionId])
+  @@unique([organizationId, billingProvider, requestKeyHash], map: "BillingCheckoutSession_org_provider_request_key")
+  @@unique([organizationId, billingProvider, activeKey], map: "BillingCheckoutSession_org_provider_active_key")
+  @@index([organizationId, status, expiresAt])
+}
+
+/// Local projection of the billing provider's canonical subscription object.
+model SubscriptionMirror {
+  id                         String    @id @default(uuid())
+  organizationId             String
+  billingAccountId           String
+  billingProvider            String
+  externalSubscriptionId     String
+  planKey                    String
+  status                     String
+  activeKey                  String?
+  currentPeriodStart         DateTime?
+  currentPeriodEnd           DateTime?
+  trialEnd                   DateTime?
+  cancelAtPeriodEnd          Boolean   @default(false)
+  canceledAt                 DateTime?
+  graceUntil                 DateTime?
+  providerPayload            Json?
+  lastProviderEventCreatedAt DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  entitlements   Entitlement[]
+
+  @@unique([billingProvider, externalSubscriptionId])
+  @@unique([id, organizationId])
+  @@unique([organizationId, billingProvider, activeKey])
+  @@index([organizationId, status])
+  @@index([currentPeriodEnd])
+}
+
+/// Materialized tenant entitlement snapshot used in the request path.
+model Entitlement {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  subscriptionMirrorId String?
+  key                  String
+  enabled              Boolean   @default(true)
+  limit                Decimal?  @db.Decimal(20, 6)
+  unit                 String?
+  value                Json?
+  source               String
+  effectiveAt          DateTime  @default(now())
+  expiresAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscriptionMirror SubscriptionMirror? @relation(fields: [subscriptionMirrorId, organizationId], references: [id, organizationId], onDelete: NoAction)
+
+  @@unique([organizationId, key])
+  @@index([organizationId, enabled, expiresAt])
+}
+
+model TenantBudget {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  clinicId             String?
+  metric               String
+  period               String    @default("monthly")
+  currency             String?
+  softLimitQuantity    Decimal?  @db.Decimal(20, 6)
+  hardLimitQuantity    Decimal?  @db.Decimal(20, 6)
+  softLimitAmountMinor BigInt?
+  hardLimitAmountMinor BigInt?
+  enforcementMode      String    @default("alert")
+  alertThresholds      Json?
+  status               String    @default("active")
+  effectiveAt          DateTime  @default(now())
+  expiresAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?                      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  alerts       BudgetAlertDelivery[]
+  alertIssues  BudgetAlertEvaluationIssue[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, metric, status])
+  @@index([clinicId, metric])
+}
+
+/// Durable, idempotent threshold notification. It contains aggregate usage
+/// only and never patient or communication payload data.
+model BudgetAlertDelivery {
+  id                String    @id @default(uuid())
+  organizationId    String
+  clinicId          String?
+  tenantBudgetId    String
+  recipientUserId   String
+  metric            String
+  dimension         String
+  threshold         Int
+  periodStart       DateTime  @db.Timestamptz(3)
+  periodEnd         DateTime  @db.Timestamptz(3)
+  actualQuantity    Decimal?  @db.Decimal(20, 6)
+  actualAmountMinor BigInt?
+  limitQuantity     Decimal?  @db.Decimal(20, 6)
+  limitAmountMinor  BigInt?
+  currency          String?
+  status            String    @default("pending")
+  attempts          Int       @default(0)
+  nextAttemptAt     DateTime?
+  lockedAt          DateTime?
+  leaseToken        String?
+  lastError         String?
+  deliveredAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  tenantBudget TenantBudget @relation(fields: [tenantBudgetId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  recipient    User         @relation(fields: [recipientUserId], references: [id], onDelete: NoAction)
+
+  @@unique([tenantBudgetId, periodStart, threshold, dimension, recipientUserId], map: "BudgetAlert_budget_period_threshold_dimension_recipient_key")
+  @@index([status, nextAttemptAt, createdAt], map: "BudgetAlert_status_retry_created_idx")
+  @@index([organizationId, createdAt])
+  @@index([recipientUserId, createdAt])
+}
+
+/// Durable non-PHI signal that an alert policy could not be evaluated safely.
+model BudgetAlertEvaluationIssue {
+  id             String    @id @default(uuid())
+  organizationId String
+  tenantBudgetId String
+  periodStart    DateTime  @db.Timestamptz(3)
+  periodEnd      DateTime  @db.Timestamptz(3)
+  code           String
+  status         String    @default("active")
+  occurrences    Int       @default(1)
+  details        Json?
+  lastSeenAt     DateTime  @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenantBudget TenantBudget @relation(fields: [tenantBudgetId, organizationId], references: [id, organizationId], onDelete: NoAction)
+
+  @@unique([tenantBudgetId, periodStart, code], map: "BudgetAlertIssue_budget_period_code_key")
+  @@index([status, lastSeenAt], map: "BudgetAlertIssue_status_seen_idx")
+  @@index([organizationId, createdAt])
+}
+
+model UsageExport {
+  id              String    @id @default(uuid())
+  organizationId  String
+  usageEventId    String
+  billingProvider String
+  externalEventId String?
+  idempotencyKey  String
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  payload         Json?
+  response        Json?
+  lastError       String?
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  exportedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usageEvent   UsageEvent   @relation(fields: [usageEventId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([billingProvider, idempotencyKey])
+  @@index([status, nextAttemptAt, organizationId, createdAt])
+  @@index([usageEventId])
+}
+
+/// Transactional outbox. Application transactions insert rows here; workers
+/// claim them with row locking and perform provider side effects afterwards.
+model OutboxEvent {
+  id             String    @id @default(uuid())
+  organizationId String
+  clinicId       String?
+  aggregateType  String
+  aggregateId    String
+  eventType      String
+  idempotencyKey String
+  payload        Json
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  availableAt    DateTime  @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?
+  lastError      String?
+  processedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinic       Clinic?      @relation(fields: [clinicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([status, availableAt])
+  @@index([organizationId, aggregateType, aggregateId])
+}
+
+/// Liveness signal for a logical background-worker deployment. The row holds
+/// operational metadata only; it must never contain tenant or patient data.
+model WorkerHeartbeat {
+  name          String   @id
+  lastStartedAt DateTime
+  lastSeenAt    DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([lastSeenAt])
+}
+
+model WorkerTaskStatus {
+  name                  String    @id
+  workerName            String
+  expectedMaxAgeSeconds Int
+  lastStartedAt         DateTime
+  lastSucceededAt       DateTime?
+  lastFailedAt          DateTime?
+  consecutiveFailures   Int       @default(0)
+  lastErrorCode         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([workerName, lastSucceededAt])
+}
+
+model ReconciliationRun {
+  id                     String    @id @default(uuid())
+  organizationId         String
+  provider               String
+  scope                  String
+  windowStart            DateTime
+  windowEnd              DateTime
+  status                 String    @default("pending")
+  localEventCount        Int       @default(0)
+  providerEventCount     Int       @default(0)
+  differenceQuantity     Decimal?  @db.Decimal(20, 6)
+  differenceAmountMicros BigInt?
+  currency               String?
+  summary                Json?
+  error                  String?
+  startedAt              DateTime?
+  completedAt            DateTime?
+  createdAt              DateTime  @default(now())
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  costEntries  ProviderCostEntry[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, provider, windowStart, windowEnd], map: "ReconciliationRun_tenant_provider_window_idx")
+  @@index([status, createdAt])
 }

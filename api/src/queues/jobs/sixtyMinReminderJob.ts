@@ -5,63 +5,67 @@ import { formatInTimezone, isWithinHours } from '../../lib/timezone';
 
 interface SixtyMinReminderJobData {
   appointmentId: string;
-  patientPhone: string;
-  patientName: string;
-  clinicName: string;
 }
 
-/**
- * sixtyMinReminderJob.ts — places (or SMS-falls-back) the 60-minute-before
- * reminder call. Split out of the monolithic reminder worker for readability.
- */
-export async function runSixtyMinReminderJob(data: SixtyMinReminderJobData): Promise<void> {
-  const { appointmentId, patientPhone, patientName, clinicName } = data;
-
+export async function runSixtyMinReminderJob(
+  data: SixtyMinReminderJobData
+): Promise<'sent' | 'skipped'> {
   const appointment = await prisma.appointment.findUnique({
-    where: { id: appointmentId },
-    include: { clinic: true },
+    where: { id: data.appointmentId },
+    include: { clinic: true, patient: true },
   });
 
-  if (!appointment || appointment.status === 'cancelled') {
-    console.log(`Appointment ${appointmentId} not active — skipping 60-min reminder`);
-    return;
+  if (!appointment || !['scheduled', 'confirmed'].includes(appointment.status)) {
+    return 'skipped';
   }
 
-  const timezone = appointment.clinic.timezone ?? 'Asia/Kolkata';
+  const timezone = appointment.clinic.timezone;
   const { readableTime, readableDate } = formatInTimezone(appointment.startAt, timezone);
-  const firstName = patientName.split(' ')[0];
-  const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
+  const firstName = appointment.patient.name.trim().split(/\s+/)[0] || 'there';
+  const message =
+    `Hi ${firstName}, reminder from ${appointment.clinic.name}: ` +
+    `your appointment is in 1 hour at ${readableTime}. ` +
+    'Please call us if you need to reschedule. Reply STOP to opt out.';
 
-  const canCall = isWithinHours(timezone, 8, 21);
-  console.log(`canCall (8am–9pm in ${timezone}): ${canCall}`);
-
-  if (canCall) {
+  if (isWithinHours(timezone, 8, 21)) {
     try {
       await placeOutboundCall(
-        phone,
-        process.env.VAPI_REMINDER_ASSISTANT_ID!,
-        { patientName: firstName, clinicName, appointmentTime: readableTime, appointmentDate: readableDate }
+        {
+          organizationId: appointment.organizationId,
+          clinicId: appointment.clinicId,
+          appointmentId: appointment.id,
+          patientId: appointment.patientId,
+          idempotencyKey: `appointment:${appointment.id}:60min-reminder:voice:v1`,
+          purpose: 'appointment_reminder',
+          defaultCallingCode: appointment.clinic.defaultCallingCode,
+        },
+        appointment.patient.phone,
+        {
+          patientName: firstName,
+          clinicName: appointment.clinic.name,
+          appointmentTime: readableTime,
+          appointmentDate: readableDate,
+        }
       );
-      console.log('60-min reminder call placed ✓');
-    } catch (err: any) {
-      console.error('60-min reminder call failed — SMS fallback:', err?.message);
-      await sendSMS(phone,
-        `Hi ${firstName}, reminder from ${clinicName}: your appointment is in 1 hour at ${readableTime}. ` +
-        `Please call us if you need to reschedule. Do not reply to this message.`
-      );
+      return 'sent';
+    } catch {
+      // A distinct, idempotent SMS operation is the delivery fallback.
     }
-  } else {
-    console.log('Outside call hours — sending SMS reminder');
-    await sendSMS(phone,
-      `Hi ${firstName}, reminder from ${clinicName}: your appointment is in 1 hour at ${readableTime}. ` +
-      `Please call us if you need to reschedule. Do not reply to this message.`
-    );
   }
 
-  await prisma.reminderJob.updateMany({
-    where: { appointmentId, type: '60min' },
-    data: { status: 'sent', sentAt: new Date() },
-  });
+  await sendSMS(
+    {
+      organizationId: appointment.organizationId,
+      clinicId: appointment.clinicId,
+      appointmentId: appointment.id,
+      patientId: appointment.patientId,
+      idempotencyKey: `appointment:${appointment.id}:60min-reminder:sms:v1`,
+      purpose: 'appointment_reminder_fallback',
+      defaultCallingCode: appointment.clinic.defaultCallingCode,
+    },
+    appointment.patient.phone,
+    message
+  );
 
-  console.log('60-min reminder done ✓');
+  return 'sent';
 }

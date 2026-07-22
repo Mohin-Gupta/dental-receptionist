@@ -1,42 +1,84 @@
+import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { deleteCalendarEvent } from '../services/googleCalendar';
-import { utcToISTReadable } from './helpers';
-import { cancelReminders } from '../queues/reminderQueue';
+import { formatInTimezone } from '../lib/timezone';
+import {
+  AppointmentCommandError,
+  cancelAppointmentCommand,
+} from '../services/appointmentCommands';
+import {
+  CALLER_VERIFICATION_REQUIRED,
+  isVerifiedCallPatient,
+} from './callerVerification';
 
+const cancelAppointmentSchema = z.object({
+  appointmentId: z.string().trim().uuid(),
+}).strict();
+
+/**
+ * Cancels only an appointment owned by this clinic and by the verified caller.
+ * The command writes the cancellation and its outbox event atomically; provider
+ * cleanup and notifications are retried by the worker after this returns.
+ */
 export async function cancelAppointment(
   clinicId: string,
-  parameters: any
+  callId: string,
+  parameters: unknown,
+  callerNumber?: string
 ): Promise<string> {
-  const { appointmentId } = parameters;
-
-  if (!appointmentId) return 'No appointment ID provided. Ask patient to confirm which appointment.';
-
-  const appointment = await prisma.appointment.findFirst({
-    where: { id: appointmentId, clinicId },
-    include: { patient: true },
-  });
-
-  if (!appointment) return 'Appointment not found. Ask patient to confirm the details.';
-
-  if (appointment.googleEventId) {
-    try {
-      await deleteCalendarEvent(clinicId, appointment.googleEventId, appointment.doctorId);
-    } catch (err: any) {
-      console.warn('Calendar delete failed (continuing):', err?.message);
-    }
+  const parsed = cancelAppointmentSchema.safeParse(parameters);
+  if (!parsed.success) {
+    return 'No valid appointment ID was provided. Ask the patient to choose a verified appointment first.';
   }
 
-  await prisma.appointment.update({
-    where: { id: appointmentId },
-    data: { status: 'cancelled' },
+  const appointment = await prisma.appointment.findFirst({
+    where: { id: parsed.data.appointmentId, clinicId },
+    include: {
+      patient: { select: { name: true, phone: true } },
+      clinic: {
+        select: {
+          organizationId: true,
+          timezone: true,
+          defaultCallingCode: true,
+        },
+      },
+    },
   });
 
-  await cancelReminders(appointmentId);
-  console.log('Reminders cancelled ✓');
+  // Missing IDs and caller mismatches deliberately have the same response so
+  // appointment identifiers cannot be used as an enumeration oracle.
+  if (
+    !appointment ||
+    appointment.organizationId !== appointment.clinic.organizationId ||
+    !(await isVerifiedCallPatient(clinicId, callId, appointment.patientId))
+  ) {
+    return CALLER_VERIFICATION_REQUIRED;
+  }
 
-  const { readableDate, readableTime } = utcToISTReadable(appointment.startAt);
-  const firstName = appointment.patient.name.split(' ')[0];
+  const { readableDate, readableTime } = formatInTimezone(
+    appointment.startAt,
+    appointment.clinic.timezone
+  );
+  const firstName = appointment.patient.name.trim().split(/\s+/)[0] || 'there';
 
-  console.log(`Cancelled ✓ ${appointmentId}`);
-  return `Cancelled. Say EXACTLY: "Done — your ${appointment.reason} on ${readableDate} at ${readableTime} has been cancelled, ${firstName}. Hope to see you again soon. Take care." Then end the call.`;
+  try {
+    const result = await cancelAppointmentCommand({
+      organizationId: appointment.organizationId,
+      clinicId,
+      appointmentId: appointment.id,
+    });
+    if (result.duplicate) {
+      return `Already cancelled. Say: "That appointment on ${readableDate} at ${readableTime} is already cancelled, ${firstName}."`;
+    }
+    return `Cancelled. Say EXACTLY: "Done — your appointment on ${readableDate} at ${readableTime} has been cancelled, ${firstName}. Hope to see you again soon. Take care." Then end the call.`;
+  } catch (error) {
+    if (error instanceof AppointmentCommandError) {
+      if (error.code === 'not_active') {
+        return 'That verified appointment can no longer be cancelled automatically. Offer to have clinic staff call back.';
+      }
+      if (error.code === 'concurrent_change') {
+        return 'That appointment changed while I was processing it. Do not make another change; offer to have clinic staff call back.';
+      }
+    }
+    throw error;
+  }
 }

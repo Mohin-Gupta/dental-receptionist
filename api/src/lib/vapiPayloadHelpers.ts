@@ -40,11 +40,15 @@ export function extractDirectionAndPhone(message: any): { direction: 'inbound' |
     call?.customer?.phoneNumber ??
     message.customer?.number ??
     message.customer?.phoneNumber ??
+    call?.from?.phoneNumber ??
+    call?.from?.number ??
     call?.phoneNumber ??
     null;
 
   if (!rawNumber) {
-    console.warn('Could not extract phone number from call payload. call.customer:', JSON.stringify(call?.customer));
+    // Provider payloads may contain patient identifiers. Log only structural
+    // diagnostics, never the customer object itself.
+    console.warn('Could not extract a phone number from the call payload');
     return { direction, phoneNumber: null };
   }
 

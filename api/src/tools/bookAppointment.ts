@@ -1,108 +1,76 @@
 import { prisma } from '../lib/prisma';
-import { createCalendarEvent } from '../services/googleCalendar';
-import { toClinicTimeString, addMinutesToClinicString, formatInTimezone, getClinicTimezone } from '../lib/timezone';
-import { slotCache, confirmedDetails, nameCache, clearCallState } from './state';
-import { normalizeTime, toReadableTime } from './helpers';
-import { scheduleReminders } from '../queues/reminderQueue';
-import { sendSMS } from '../services/twilio';
-import { resolveDoctorForClinic } from '../services/doctors';
+import { formatInTimezone } from '../lib/timezone';
+import {
+  AppointmentCommandError,
+  createAppointmentCommand,
+} from '../services/appointmentCommands';
+import { clearCallState, getConfirmedDetails, getPatientName } from './state';
+
+interface BookAppointmentParameters {
+  doctorId?: string | null;
+}
 
 export async function bookAppointment(
   clinicId: string,
   callId: string,
-  parameters: any
+  parameters: BookAppointmentParameters
 ): Promise<string> {
-  const confirmed    = confirmedDetails[callId];
-  const patientName  = nameCache[callId] ?? confirmed?.patientName ?? parameters.patientName;
-  const patientPhone = (confirmed?.patientPhone ?? parameters.patientPhone ?? '').replace(/\D/g, '');
-  const date         = confirmed?.date ?? parameters.date;
-  const time         = confirmed?.time ?? parameters.time;
-  const reason       = confirmed?.reason ?? parameters.reason ?? 'General visit';
-
-  console.log('Booking:', { patientName, patientPhone, date, time, reason });
-
-  const finalTime = normalizeTime(time);
-  const [year, month, day] = date.split('-').map(Number);
-  const [hour, min]        = finalTime.split(':').map(Number);
-
-  // Load clinic timezone — single DB call, used everywhere below
-  const timezone = await getClinicTimezone(clinicId);
-  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  const organizationId = clinic.organizationId;
-  const doctor = await resolveDoctorForClinic(organizationId, clinicId, parameters.doctorId);
-
-  const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
-  const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
-  const startAtDate = new Date(startAtStr);
-  const endAtDate   = new Date(endAtStr);
-
-  if (isNaN(startAtDate.getTime())) throw new Error(`Invalid date: ${date} ${finalTime}`);
-
-  let patient = await prisma.patient.findUnique({
-    where: { organizationId_phone: { organizationId, phone: patientPhone } },
+  const clinic = await prisma.clinic.findUnique({
+    where: { id: clinicId },
+    select: { organizationId: true, timezone: true },
   });
+  if (!clinic) return 'The clinic could not be verified. Offer to have clinic staff call back.';
 
-  if (!patient) {
-    patient = await prisma.patient.create({
-      data: { organizationId, clinicId, name: patientName, phone: patientPhone },
-    });
-  } else {
-    await prisma.patient.update({
-      where: { id: patient.id },
-      data: { name: patientName },
-    });
+  const operationIdempotencyKey = `call:${callId}`;
+  const fullIdempotencyKey = `voice:appointment:create:${clinic.organizationId}:${operationIdempotencyKey}`;
+  const previous = await prisma.appointment.findUnique({
+    where: { idempotencyKey: fullIdempotencyKey },
+    include: { patient: { select: { name: true } } },
+  });
+  if (previous) {
+    const { readableTime } = formatInTimezone(previous.startAt, clinic.timezone);
+    const firstName = previous.patient.name.trim().split(/\s+/)[0] || 'there';
+    return `Already booked. Say EXACTLY: "You are all set, ${firstName}. See you at ${readableTime} — we will send a reminder. Is there anything else I can help you with today?"`;
   }
 
-  const googleEventId = await createCalendarEvent(clinicId, {
-    doctorId: doctor.id,
-    patientName, patientPhone, reason,
-    startAt: startAtStr, endAt: endAtStr,
-  });
+  const [confirmed, storedName] = await Promise.all([
+    getConfirmedDetails({ clinicId, callId }),
+    getPatientName({ clinicId, callId }),
+  ]);
+  if (!confirmed) {
+    return 'The confirmed booking details have expired or are missing. Do not book. Apologise and tell the patient a team member will call them back.';
+  }
 
-  const appointment = await prisma.appointment.create({
-    data: {
-      organizationId, clinicId, doctorId: doctor.id, patientId: patient.id, reason,
-      startAt: startAtDate, endAt: endAtDate,
-      status: 'scheduled', googleEventId,
-    },
-  });
-
-  clearCallState(callId);
-  console.log('Booked ✓', appointment.id);
-
-  // ── Booking confirmation SMS ───────────────────────────────────────────────
   try {
-    const clinicName = clinic?.name ?? 'the clinic';
-    const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
-    const phone = patientPhone.startsWith('+') ? patientPhone : `+91${patientPhone}`;
-    const firstName = patientName.split(' ')[0];
+    const result = await createAppointmentCommand({
+      organizationId: clinic.organizationId,
+      clinicId,
+      patientName: storedName ?? confirmed.patientName,
+      patientPhone: confirmed.patientPhone,
+      date: confirmed.date,
+      time: confirmed.time,
+      reason: confirmed.reason,
+      doctorId: parameters.doctorId,
+      idempotencyKey: operationIdempotencyKey,
+      source: 'voice',
+    });
+    await clearCallState(clinicId, callId);
 
-    await sendSMS(phone,
-      `Hi ${firstName}, your appointment at ${clinicName} has been confirmed for ` +
-      `${readableDate} at ${readableTime} (${reason}). ` +
-      `Please call us if you need to reschedule. Do not reply to this message.`
-    );
-    console.log('Booking confirmation SMS sent ✓');
-  } catch (err: any) {
-    console.warn('Booking confirmation SMS failed (non-fatal):', err?.message);
+    const { readableTime } = formatInTimezone(result.appointment.startAt, clinic.timezone);
+    const firstName = (storedName ?? confirmed.patientName).trim().split(/\s+/)[0] || 'there';
+    return `Booked. Say EXACTLY: "You are all set, ${firstName}. See you at ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If no or bye say "Take care, have a great day" and end the call.`;
+  } catch (error) {
+    if (error instanceof AppointmentCommandError) {
+      if (error.code === 'slot_unavailable') {
+        return 'That slot was just taken. Do not book it. Apologise and ask the patient to choose another available time.';
+      }
+      if (error.code === 'organization_inactive' || error.code === 'commercial_access') {
+        return 'Automatic booking is temporarily unavailable. Apologise and offer a clinic staff callback.';
+      }
+      if (error.code === 'invalid_input') {
+        return 'The confirmed appointment date or time is invalid. Ask the patient to choose an available future slot.';
+      }
+    }
+    throw error;
   }
-
-  // ── Schedule 60-min reminder + feedback SMS ────────────────────────────────
-  try {
-    await scheduleReminders(
-      appointment.id,
-      patientPhone,
-      patientName,
-      clinic?.name ?? 'the clinic',
-      startAtDate
-    );
-    console.log('Reminders scheduled ✓');
-  } catch (err: any) {
-    console.warn('Reminder scheduling failed (non-fatal):', err?.message);
-  }
-
-  const readableTime = toReadableTime(hour, min);
-  const firstName = patientName.split(' ')[0];
-
-  return `Booked. Say EXACTLY: "You are all set, ${firstName}. See you on ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If no or bye say "Take care, have a great day" and end the call.`;
 }

@@ -3,8 +3,8 @@ import { AuthProvider } from '@/lib/auth';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Smile Dental — Admin',
-  description: 'AI Receptionist Admin Dashboard',
+  title: 'AI Receptionist — Clinic operations',
+  description: 'Multi-tenant AI receptionist and clinic operations dashboard',
 };
 
 export default function RootLayout({

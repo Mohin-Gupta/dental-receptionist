@@ -23,6 +23,7 @@ import api, {
 interface AuthContextValue {
   user: AuthUser | null;
   role: AuthRole | null;
+  organizationRole: AuthRole | null;
   activeOrganizationId: string | null;
   activeClinicId: string | null;
   organizations: AuthOrganization[];
@@ -34,6 +35,9 @@ interface AuthContextValue {
   canWriteAppointments: boolean;
   canManageSettings: boolean;
   canManageUsers: boolean;
+  canReadBilling: boolean;
+  canManageBilling: boolean;
+  canManageIntegrations: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,6 +59,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setMe(response.data);
       setAuthScope(response.data.activeOrganization.id, response.data.activeClinic.id);
       await refreshCsrfToken().catch(() => null);
+      const mfa = await api.get<{
+        required: boolean;
+        enabled: boolean;
+        sessionVerified: boolean;
+      }>('/auth/mfa/status');
+      if (
+        ((mfa.data.required && !mfa.data.enabled) ||
+          (mfa.data.enabled && !mfa.data.sessionVerified)) &&
+        typeof window !== 'undefined' &&
+        window.location.pathname !== '/mfa'
+      ) {
+        router.replace('/mfa');
+      }
     } catch {
       setMe(null);
       setAuthScope(null, null);
@@ -62,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     refresh();
@@ -95,9 +112,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AuthContextValue>(() => {
     const role = me?.activeClinic.role ?? null;
+    const organizationRole = me?.activeOrganization.role ?? null;
     return {
       user: me?.user ?? null,
       role,
+      organizationRole,
       activeOrganizationId: me?.activeOrganization.id ?? null,
       activeClinicId: me?.activeClinic.id ?? null,
       organizations: me?.organizations ?? [],
@@ -108,7 +127,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       canWriteAppointments: can(role, ['owner', 'admin', 'staff']),
       canManageSettings: can(role, ['owner', 'admin']),
-      canManageUsers: can(role, ['owner']),
+      canManageUsers: organizationRole === 'owner',
+      canReadBilling: can(organizationRole, ['owner', 'admin']),
+      canManageBilling: organizationRole === 'owner',
+      canManageIntegrations: organizationRole === 'owner',
     };
   }, [loading, logout, me, refresh, setScope]);
 

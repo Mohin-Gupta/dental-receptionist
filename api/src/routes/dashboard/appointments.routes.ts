@@ -1,346 +1,218 @@
-import { Router, Request, Response } from 'express';
-import { prisma } from '../../lib/prisma';
-import {
-  toClinicTimeString,
-  addMinutesToClinicString,
-  formatInTimezone,
-  getClinicTimezone,
-} from '../../lib/timezone';
-import {
-  deleteCalendarEvent,
-  createCalendarEvent,
-} from '../../services/googleCalendar';
-import { resolveDoctorForClinic } from '../../services/doctors';
-import { cancelReminders, scheduleReminders } from '../../queues/reminderQueue';
-import { normalizeTime } from '../../tools/helpers';
-import { sendPatientNotification } from './appointmentNotifications';
+import { type Request, type Response } from 'express';
+import { z } from 'zod';
+import { auditAction, auditRequired } from '../../auth/audit';
 import { requirePermission } from '../../auth/middleware';
-import { auditAction } from '../../auth/audit';
+import { prisma } from '../../lib/prisma';
+import { formatInTimezone, getClinicTimezone } from '../../lib/timezone';
+import {
+  AppointmentCommandError,
+  cancelAppointmentCommand,
+  createAppointmentCommand,
+  rescheduleAppointmentCommand,
+} from '../../services/appointmentCommands';
+import { createRouter } from '../../lib/asyncRouter';
+import { publicClinicSelect } from '../../services/publicClinic';
 
-const router = Router();
+const router = createRouter();
 
-// ── List — classified by tab (upcoming / past / cancelled) ───────────────────
-router.get('/dashboard/appointments', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+const appointmentIdSchema = z.string().uuid();
+const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const doctorIdSchema = z.preprocess(
+  value => (value === '' || value === null ? undefined : value),
+  z.string().uuid().optional()
+);
+const listQuerySchema = z.object({
+  tab: z.enum(['upcoming', 'past', 'cancelled']).default('upcoming'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+const createSchema = z.object({
+  patientName: z.string().trim().min(2).max(120),
+  patientPhone: z.string().trim().min(7).max(30),
+  date: dateSchema,
+  time: z.string().trim().min(1).max(20),
+  reason: z.string().trim().min(1).max(500),
+  doctorId: doctorIdSchema,
+}).strict();
+const rescheduleSchema = z.object({
+  newDate: dateSchema,
+  newTime: z.string().trim().min(1).max(20),
+  doctorId: doctorIdSchema,
+}).strict();
+
+function requestIdempotencyKey(req: Request): string | null {
+  const value = req.header('idempotency-key')?.trim();
+  return value && /^[A-Za-z0-9._:-]{8,200}$/.test(value) ? value : null;
+}
+
+function sendCommandError(res: Response, error: unknown) {
+  if (!(error instanceof AppointmentCommandError)) {
+    console.error('Appointment command failed', {
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
+    return res.status(500).json({ error: 'Appointment operation failed' });
+  }
+  const status =
+    error.code === 'not_found' ? 404 :
+    error.code === 'invalid_input' ? 400 :
+    error.code === 'commercial_access' ? 402 :
+    error.code === 'organization_inactive' ? 403 : 409;
+  return res.status(status).json({ error: error.message, code: error.code });
+}
+
+router.get('/dashboard/appointments', requirePermission('phi:read'), async (req, res) => {
+  const parsed = listQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid appointment query' });
+  const { tab, page, limit } = parsed.data;
   const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
-  const { tab = 'upcoming', page = '1', limit = '20' } = req.query;
   const now = new Date();
-  const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
+  const base = { organizationId, clinicId };
+  const where = tab === 'upcoming'
+    ? { ...base, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } }
+    : tab === 'past'
+      ? { ...base, endAt: { lt: now }, status: { in: ['scheduled', 'confirmed', 'completed'] } }
+      : { ...base, status: 'cancelled' };
 
-  type WhereClause = {
-    organizationId: string;
-    clinicId: string;
-    startAt?: { gte?: Date; lt?: Date };
-    endAt?: { lt?: Date };
-    status?: string | { in: string[] };
-  };
-
-  let where: WhereClause = { organizationId, clinicId };
-
-  if (tab === 'upcoming') {
-    where = { organizationId, clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } };
-  } else if (tab === 'past') {
-    // Classified by endAt time, not the 'completed' status flag — independent
-    // of whether the hourly status-updater cron job has run yet.
-    where = {
-      organizationId,
-      clinicId,
-      endAt: { lt: now },
-      status: { in: ['scheduled', 'confirmed', 'completed'] },
-    };
-  } else if (tab === 'cancelled') {
-    where = { organizationId, clinicId, status: 'cancelled' };
-  }
-
-  const [appointments, total] = await Promise.all([
+  const [appointments, total, timezone] = await Promise.all([
     prisma.appointment.findMany({
       where,
-      include: { patient: true, doctor: true, clinic: true },
+      include: { patient: true, doctor: true, clinic: { select: publicClinicSelect } },
       orderBy: tab === 'upcoming' ? { startAt: 'asc' } : { startAt: 'desc' },
-      skip,
-      take: parseInt(limit as string),
+      skip: (page - 1) * limit,
+      take: limit,
     }),
     prisma.appointment.count({ where }),
+    getClinicTimezone(clinicId),
   ]);
 
-  const timezone = await getClinicTimezone(clinicId);
-
-  res.json({ appointments, total, page: parseInt(page as string), tab, timezone });
-});
-
-// ── Single appointment ────────────────────────────────────────────────────────
-router.get('/dashboard/appointments/:id', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
-  const appointment = await prisma.appointment.findFirst({
-    where: { id: req.params.id, organizationId: req.auth!.organizationId, clinicId: req.auth!.clinicId },
-    include: { patient: true, doctor: true, clinic: true, callLogs: true, reminderJobs: true },
+  await auditRequired(req, 'phi.appointments_list_viewed', {
+    targetType: 'Appointment',
+    metadata: { page, resultCount: appointments.length, tab },
   });
-  if (!appointment) return res.status(404).json({ error: 'Not found' });
-  res.json(appointment);
+  return res.json({ appointments, total, page, limit, tab, timezone });
 });
 
-// ── Manual booking from dashboard ─────────────────────────────────────────────
-// Mirrors tools/bookAppointment.ts exactly: find-or-create patient by phone,
-// create Google Calendar event, create Appointment row, send booking
-// confirmation SMS, schedule the 60-min reminder + feedback SMS jobs.
-router.post('/dashboard/appointments', requirePermission('appointments:write'), async (req: Request, res: Response) => {
-  const organizationId = req.auth!.organizationId;
-  const clinicId = req.auth!.clinicId;
-  const { patientName, patientPhone, date, time, reason, doctorId } = req.body as {
-    patientName: string;
-    patientPhone: string;
-    date: string;
-    time: string;
-    reason: string;
-    doctorId?: string;
-  };
+router.get('/dashboard/appointments/:id', requirePermission('phi:read'), async (req, res) => {
+  const id = appointmentIdSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Invalid appointment ID' });
+  const appointment = await prisma.appointment.findFirst({
+    where: {
+      id: id.data,
+      organizationId: req.auth!.organizationId,
+      clinicId: req.auth!.clinicId,
+    },
+    include: {
+      patient: true,
+      doctor: true,
+      clinic: { select: publicClinicSelect },
+      callLogs: true,
+      reminderJobs: true,
+    },
+  });
+  if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
+  await auditRequired(req, 'phi.appointment_viewed', {
+    targetType: 'Appointment',
+    targetId: appointment.id,
+  });
+  return res.json(appointment);
+});
 
-  if (!patientName || !patientPhone || !date || !time || !reason) {
+router.post('/dashboard/appointments', requirePermission('appointments:write'), async (req, res) => {
+  const parsed = createSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid appointment details' });
+  const idempotencyKey = requestIdempotencyKey(req);
+  if (!idempotencyKey) {
     return res.status(400).json({
-      error: 'patientName, patientPhone, date, time, and reason are all required',
+      error: 'A stable Idempotency-Key header (8-200 letters, numbers, dot, colon, underscore, or dash) is required',
     });
   }
 
   try {
-    const cleanPhone = patientPhone.replace(/\D/g, '');
-    const finalTime = normalizeTime(time);
-    const [year, month, day] = date.split('-').map(Number);
-    const [hour, min] = finalTime.split(':').map(Number);
-
-    const timezone = await getClinicTimezone(clinicId);
-    const doctor = await resolveDoctorForClinic(organizationId, clinicId, doctorId);
-
-    const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
-    const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
-    const startAtDate = new Date(startAtStr);
-    const endAtDate   = new Date(endAtStr);
-
-    if (isNaN(startAtDate.getTime())) {
-      return res.status(400).json({ error: `Invalid date/time: ${date} ${finalTime}` });
-    }
-
-    let patient = await prisma.patient.findUnique({
-      where: { organizationId_phone: { organizationId, phone: cleanPhone } },
+    const result = await createAppointmentCommand({
+      organizationId: req.auth!.organizationId,
+      clinicId: req.auth!.clinicId,
+      ...parsed.data,
+      idempotencyKey,
+      source: 'dashboard',
     });
-
-    if (!patient) {
-      patient = await prisma.patient.create({
-        data: { organizationId, clinicId, name: patientName, phone: cleanPhone },
-      });
-    } else {
-      await prisma.patient.update({
-        where: { id: patient.id },
-        data: { name: patientName },
-      });
-    }
-
-    const googleEventId = await createCalendarEvent(clinicId, {
-      doctorId: doctor.id,
-      patientName,
-      patientPhone: cleanPhone,
-      reason,
-      startAt: startAtStr,
-      endAt: endAtStr,
-    });
-
-    const appointment = await prisma.appointment.create({
-      data: {
-        organizationId,
-        clinicId,
-        doctorId: doctor.id,
-        patientId: patient.id,
-        reason,
-        startAt: startAtDate,
-        endAt: endAtDate,
-        status: 'scheduled',
-        googleEventId,
-      },
-    });
-
-    console.log('Manually booked from dashboard ✓', appointment.id);
-
-    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
-    const clinicName = clinic?.name ?? 'the clinic';
-    const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
-    const firstName = patientName.split(' ')[0];
-
-    await sendPatientNotification(
-      cleanPhone,
-      `Hi ${firstName}, your appointment at ${clinicName} has been confirmed for ` +
-      `${readableDate} at ${readableTime} (${reason}). ` +
-      `Please call us if you need to reschedule. Do not reply to this message.`,
-      'Booking confirmation'
-    );
-
-    try {
-      await scheduleReminders(appointment.id, cleanPhone, patientName, clinicName, startAtDate);
-      console.log('Reminders scheduled ✓ (manual booking)');
-    } catch (err: any) {
-      console.warn('Reminder scheduling failed (non-fatal):', err?.message);
-    }
-
-    await auditAction(req, 'appointment.created', {
+    const timezone = await getClinicTimezone(req.auth!.clinicId);
+    const { readableDate, readableTime } = formatInTimezone(result.appointment.startAt, timezone);
+    await auditAction(req, result.duplicate ? 'appointment.create_replayed' : 'appointment.created', {
       targetType: 'Appointment',
-      targetId: appointment.id,
-      metadata: { patientId: patient.id, reason },
+      targetId: result.appointment.id,
+      metadata: { calendarSyncStatus: result.appointment.calendarSyncStatus },
     });
-
-    res.json({
+    return res.status(result.duplicate ? 200 : 201).json({
       success: true,
-      appointment,
-      message: `Booked ${patientName} for ${readableDate} at ${readableTime}. Confirmation SMS sent.`,
+      appointment: result.appointment,
+      duplicate: result.duplicate,
+      sideEffectsPending: result.appointment.calendarSyncStatus !== 'synced',
+      message: `Booked for ${readableDate} at ${readableTime}. Calendar and patient notification are processing.`,
     });
-  } catch (err: any) {
-    console.error('Manual booking failed:', err?.message);
-    res.status(500).json({ error: 'Failed to create appointment. Please try again.' });
+  } catch (error) {
+    return sendCommandError(res, error);
   }
 });
 
-// ── Reschedule from dashboard ─────────────────────────────────────────────────
-router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appointments:write'), async (req: Request, res: Response) => {
-  const organizationId = req.auth!.organizationId;
-  const clinicId = req.auth!.clinicId;
-  const { id } = req.params;
-  const { newDate, newTime, doctorId } = req.body as { newDate: string; newTime: string; doctorId?: string };
+router.patch('/dashboard/appointments/:id/reschedule', requirePermission('appointments:write'), async (req, res) => {
+  const id = appointmentIdSchema.safeParse(req.params.id);
+  const parsed = rescheduleSchema.safeParse(req.body);
+  const idempotencyKey = requestIdempotencyKey(req);
+  if (!id.success || !parsed.success) return res.status(400).json({ error: 'Invalid reschedule details' });
+  if (!idempotencyKey) return res.status(400).json({ error: 'A stable Idempotency-Key header is required' });
 
-  if (!newDate || !newTime) {
-    return res.status(400).json({ error: 'newDate and newTime are required' });
+  try {
+    const result = await rescheduleAppointmentCommand({
+      organizationId: req.auth!.organizationId,
+      clinicId: req.auth!.clinicId,
+      appointmentId: id.data,
+      ...parsed.data,
+      idempotencyKey,
+      source: 'dashboard',
+    });
+    const timezone = await getClinicTimezone(req.auth!.clinicId);
+    const { readableDate, readableTime } = formatInTimezone(result.appointment.startAt, timezone);
+    await auditAction(req, result.duplicate ? 'appointment.reschedule_replayed' : 'appointment.rescheduled', {
+      targetType: 'Appointment',
+      targetId: result.appointment.id,
+      metadata: { previousAppointmentId: result.previousAppointmentId },
+    });
+    return res.json({
+      success: true,
+      appointment: result.appointment,
+      duplicate: result.duplicate,
+      sideEffectsPending: result.appointment.calendarSyncStatus !== 'synced',
+      message: `Rescheduled to ${readableDate} at ${readableTime}. Calendar and patient notification are processing.`,
+    });
+  } catch (error) {
+    return sendCommandError(res, error);
   }
-
-  const oldAppointment = await prisma.appointment.findFirst({
-    where: { id, organizationId, clinicId },
-    include: { patient: true, clinic: true, doctor: true },
-  });
-
-  if (!oldAppointment) return res.status(404).json({ error: 'Appointment not found' });
-  if (oldAppointment.status === 'cancelled') {
-    return res.status(400).json({ error: 'Cannot reschedule a cancelled appointment' });
-  }
-
-  const timezone = oldAppointment.clinic.timezone ?? 'Asia/Kolkata';
-  const doctor = await resolveDoctorForClinic(organizationId, clinicId, doctorId ?? oldAppointment.doctorId);
-
-  const [year, month, day] = newDate.split('-').map(Number);
-  const [hour, min] = newTime.split(':').map(Number);
-
-  const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
-  const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
-  const startAtDate = new Date(startAtStr);
-  const endAtDate   = new Date(endAtStr);
-
-  console.log(`Reschedule: new slot in ${timezone}:`, startAtStr);
-
-  if (oldAppointment.googleEventId) {
-    try {
-      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId, oldAppointment.doctorId);
-    } catch (err) {
-      console.warn('Old calendar delete failed (continuing):', err);
-    }
-  }
-
-  await prisma.appointment.update({ where: { id }, data: { status: 'cancelled' } });
-  await cancelReminders(id);
-
-  const googleEventId = await createCalendarEvent(clinicId, {
-    doctorId: doctor.id,
-    patientName:  oldAppointment.patient.name,
-    patientPhone: oldAppointment.patient.phone,
-    reason:       oldAppointment.reason,
-    startAt:      startAtStr,
-    endAt:        endAtStr,
-  });
-
-  const newAppointment = await prisma.appointment.create({
-    data: {
-      organizationId,
-      clinicId,
-      doctorId:     doctor.id,
-      patientId:    oldAppointment.patientId,
-      reason:       oldAppointment.reason,
-      startAt:      startAtDate,
-      endAt:        endAtDate,
-      status:       'scheduled',
-      googleEventId,
-    },
-  });
-
-  await scheduleReminders(
-    newAppointment.id,
-    oldAppointment.patient.phone,
-    oldAppointment.patient.name,
-    oldAppointment.clinic.name,
-    startAtDate
-  );
-
-  const { readableTime, readableDate } = formatInTimezone(startAtDate, timezone);
-  const firstName = oldAppointment.patient.name.split(' ')[0];
-
-  await sendPatientNotification(
-    oldAppointment.patient.phone,
-    `Hi ${firstName}, your appointment at ${oldAppointment.clinic.name} has been rescheduled ` +
-    `to ${readableDate} at ${readableTime}. ` +
-    `Please call us if this does not work for you. Do not reply to this message.`,
-    'Reschedule'
-  );
-
-  await auditAction(req, 'appointment.rescheduled', {
-    targetType: 'Appointment',
-    targetId: newAppointment.id,
-    metadata: { previousAppointmentId: id },
-  });
-
-  res.json({
-    success: true,
-    appointment: newAppointment,
-    message: `Rescheduled to ${readableDate} at ${readableTime}. Patient notified via SMS.`,
-  });
 });
 
-// ── Cancel from dashboard ─────────────────────────────────────────────────────
-router.patch('/dashboard/appointments/:id/cancel', requirePermission('appointments:write'), async (req: Request, res: Response) => {
-  const organizationId = req.auth!.organizationId;
-  const clinicId = req.auth!.clinicId;
-  const { id } = req.params;
-
-  const appointment = await prisma.appointment.findFirst({
-    where: { id, organizationId, clinicId },
-    include: { patient: true, clinic: true, doctor: true },
-  });
-
-  if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
-  if (appointment.status === 'cancelled') {
-    return res.status(400).json({ error: 'Appointment is already cancelled' });
+router.patch('/dashboard/appointments/:id/cancel', requirePermission('appointments:write'), async (req, res) => {
+  const id = appointmentIdSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Invalid appointment ID' });
+  try {
+    const result = await cancelAppointmentCommand({
+      organizationId: req.auth!.organizationId,
+      clinicId: req.auth!.clinicId,
+      appointmentId: id.data,
+    });
+    await auditAction(req, result.duplicate ? 'appointment.cancel_replayed' : 'appointment.cancelled', {
+      targetType: 'Appointment',
+      targetId: id.data,
+    });
+    return res.json({
+      success: true,
+      duplicate: result.duplicate,
+      message: result.duplicate
+        ? 'Appointment was already cancelled.'
+        : 'Appointment cancelled. Calendar cleanup and patient notification are processing.',
+    });
+  } catch (error) {
+    return sendCommandError(res, error);
   }
-
-  const timezone = appointment.clinic.timezone ?? 'Asia/Kolkata';
-
-  if (appointment.googleEventId) {
-    try {
-      await deleteCalendarEvent(clinicId, appointment.googleEventId, appointment.doctorId);
-    } catch (err) {
-      console.warn('Calendar delete failed (continuing):', err);
-    }
-  }
-
-  await prisma.appointment.update({ where: { id }, data: { status: 'cancelled' } });
-  await cancelReminders(id);
-
-  const { readableTime, readableDate } = formatInTimezone(appointment.startAt, timezone);
-  const firstName = appointment.patient.name.split(' ')[0];
-
-  await sendPatientNotification(
-    appointment.patient.phone,
-    `Hi ${firstName}, your appointment at ${appointment.clinic.name} ` +
-    `on ${readableDate} at ${readableTime} has been cancelled. ` +
-    `Please call us to rebook. Do not reply to this message.`,
-    'Cancellation'
-  );
-
-  await auditAction(req, 'appointment.cancelled', {
-    targetType: 'Appointment',
-    targetId: id,
-  });
-
-  res.json({ success: true, message: `Appointment cancelled. Patient notified via SMS.` });
 });
 
 export default router;

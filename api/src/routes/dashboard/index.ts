@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { createRouter } from '../../lib/asyncRouter';
 import statsRoutes from './stats.routes';
 import appointmentsRoutes from './appointments.routes';
 import availableSlotsRoutes from './availableSlots.routes';
@@ -7,6 +7,8 @@ import callsRoutes from './calls.routes';
 import settingsRoutes from './settings.routes';
 import remindersRoutes from './reminders.routes';
 import doctorsRoutes from './doctors.routes';
+import integrationsRoutes from './integrations.routes';
+import organizationRoutes from './organization.routes';
 import { requireAuth, requireClinic, requireCsrf } from '../../auth/middleware';
 
 /**
@@ -18,7 +20,7 @@ import { requireAuth, requireClinic, requireCsrf } from '../../auth/middleware';
  * so this file is purely composition — no route paths changed, no behavior
  * changed, just where the code physically lives.
  */
-const router = Router();
+const router = createRouter();
 
 router.use('/dashboard', requireAuth, requireClinic, requireCsrf);
 
@@ -30,5 +32,7 @@ router.use(callsRoutes);
 router.use(settingsRoutes);
 router.use(remindersRoutes);
 router.use(doctorsRoutes);
+router.use(integrationsRoutes);
+router.use(organizationRoutes);
 
 export default router;

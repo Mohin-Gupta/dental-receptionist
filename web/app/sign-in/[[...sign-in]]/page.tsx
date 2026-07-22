@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -14,9 +14,18 @@ export default function SignInPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('invite') === 'accepted') {
+      setNotice('Invitation accepted. Sign in to continue; multi-factor authentication may be required.');
+    }
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -27,7 +36,8 @@ export default function SignInPage() {
       const response = await api.post('/auth/login', {
         email,
         password,
-        totpCode: mfaRequired ? totpCode : undefined,
+        totpCode: mfaRequired && !useRecoveryCode ? totpCode : undefined,
+        recoveryCode: mfaRequired && useRecoveryCode ? recoveryCode : undefined,
       });
 
       if (response.status === 202 || response.data?.mfaRequired) {
@@ -56,10 +66,16 @@ export default function SignInPage() {
             <Stethoscope className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-white">Smile Dental</h1>
-            <p className="text-sm text-gray-400">Admin Portal</p>
+            <h1 className="text-lg font-semibold text-white">AI Receptionist</h1>
+            <p className="text-sm text-gray-400">Clinic operations portal</p>
           </div>
         </div>
+
+        {notice && (
+          <div className="mb-4 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2.5">
+            <p className="text-xs text-emerald-300">{notice}</p>
+          </div>
+        )}
 
         <div className="space-y-4">
           <div>
@@ -88,16 +104,27 @@ export default function SignInPage() {
 
           {mfaRequired && (
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Authenticator code</label>
+              <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                {useRecoveryCode ? 'Recovery code' : 'Authenticator code'}
+              </label>
               <input
                 type="text"
-                inputMode="numeric"
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value)}
+                inputMode={useRecoveryCode ? 'text' : 'numeric'}
+                value={useRecoveryCode ? recoveryCode : totpCode}
+                onChange={(e) => useRecoveryCode
+                  ? setRecoveryCode(e.target.value)
+                  : setTotpCode(e.target.value)}
                 className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                autoComplete="one-time-code"
+                autoComplete={useRecoveryCode ? 'off' : 'one-time-code'}
                 required={mfaRequired}
               />
+              <button
+                type="button"
+                onClick={() => setUseRecoveryCode((value) => !value)}
+                className="mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                {useRecoveryCode ? 'Use authenticator code' : 'Use a recovery code'}
+              </button>
             </div>
           )}
         </div>
@@ -120,6 +147,16 @@ export default function SignInPage() {
         <Link href="/forgot-password" className="block text-center text-xs text-blue-400 hover:text-blue-300 mt-4">
           Forgot password?
         </Link>
+
+        <div className="mt-5 border-t border-gray-800 pt-5 text-center">
+          <p className="text-xs text-gray-500">Setting up a new clinic organization?</p>
+          <Link
+            href="/register"
+            className="mt-2 inline-flex text-sm font-medium text-blue-400 hover:text-blue-300"
+          >
+            Create an organization
+          </Link>
+        </div>
       </form>
     </div>
   );

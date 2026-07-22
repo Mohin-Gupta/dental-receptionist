@@ -1,9 +1,15 @@
-import { Router, Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { getAvailableSlots } from '../../services/googleCalendar';
 import { requirePermission } from '../../auth/middleware';
 import { resolveDoctorForClinic } from '../../services/doctors';
+import { createRouter } from '../../lib/asyncRouter';
+import {
+  assertCommercialFeatureAccess,
+  COMMERCIAL_FEATURES,
+  CommercialAccessError,
+} from '../../billing/access';
 
-const router = Router();
+const router = createRouter();
 
 // Used by the admin "New Appointment" modal to show bookable times for a given
 // date. Reuses the exact same getAvailableSlots logic Maya uses on calls —
@@ -18,6 +24,11 @@ router.get('/dashboard/available-slots', requirePermission('appointments:write')
   }
 
   try {
+    await assertCommercialFeatureAccess({
+      organizationId,
+      clinicId,
+      feature: COMMERCIAL_FEATURES.APPOINTMENTS,
+    });
     const doctor = await resolveDoctorForClinic(organizationId, clinicId, doctorId);
     const slots = await getAvailableSlots(clinicId, date, doctor.id);
     slots.sort((a, b) => {
@@ -26,8 +37,11 @@ router.get('/dashboard/available-slots', requirePermission('appointments:write')
       return (aH * 60 + aM) - (bH * 60 + bM);
     });
     res.json({ date, doctorId: doctor.id, slots });
-  } catch (err: any) {
-    console.error('Available slots fetch failed:', err?.message);
+  } catch (err: unknown) {
+    if (err instanceof CommercialAccessError) {
+      return res.status(err.statusCode).json({ error: err.message, code: err.code });
+    }
+    console.error('Available slot lookup failed');
     res.status(500).json({ error: 'Failed to fetch available slots' });
   }
 });

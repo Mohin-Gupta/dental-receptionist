@@ -8,6 +8,7 @@ async function main() {
       name: 'Smile Dental Group',
       phone: '+1xxxxxxxxxx',
       planTier: 'starter',
+      status: 'active',
     },
   });
 
@@ -34,14 +35,37 @@ async function main() {
       organizationId: organization.id,
       name: 'Smile Dental Doctor',
       clinics: {
-        create: { clinicId: clinic.id },
+        create: { organizationId: organization.id, clinicId: clinic.id },
       },
     },
   });
 
+  await prisma.entitlement.createMany({
+    data: [
+      'appointments.write',
+      'communications.voice',
+      'communications.sms',
+    ].map((key) => ({
+      organizationId: organization.id,
+      key,
+      enabled: true,
+      source: 'development-seed',
+    })),
+  });
+  await prisma.entitlement.create({
+    data: {
+      organizationId: organization.id,
+      key: 'clinics.max',
+      enabled: true,
+      limit: 1,
+      value: 1,
+      source: 'development-seed',
+    },
+  });
+
   console.log('✓ Organization, clinic, and doctor created');
-  console.log('Copy this into your .env → DEFAULT_ORGANIZATION_ID=' + organization.id);
-  console.log('Copy this into your .env → DEFAULT_CLINIC_ID=' + clinic.id);
+  console.log('Seeded development organization:', organization.id);
+  console.log('Seeded development clinic:', clinic.id);
 }
 
 main()

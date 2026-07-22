@@ -6,6 +6,12 @@
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:worker": "node dist/worker.js",
+    "test": "npm run build && node --test --require ts-node/register tests/*.test.ts",
+    "billing:sync-prices": "node dist/billing/syncPriceVersionsCli.js",
+    "vapi:bind-platform": "node dist/services/platformVapiProvisioningCli.js",
+    "security:encrypt-legacy-secrets": "node dist/ops/encryptLegacySecretsCli.js",
+    "dev:worker": "nodemon --watch src --ext ts --exec ts-node src/worker.ts",
     "auth:bootstrap": "ts-node prisma/bootstrapOwner.ts"
   },
   "prisma": {

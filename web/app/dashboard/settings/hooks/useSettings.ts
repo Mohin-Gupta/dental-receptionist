@@ -12,7 +12,7 @@ export default function useSettings() {
     activeOrganizationId,
     activeClinicId,
     canManageSettings,
-    role,
+    organizationRole,
   } = useAuth();
 
   const [form, setForm] =
@@ -98,7 +98,7 @@ export default function useSettings() {
       try {
         await api.patch(
           '/dashboard/settings',
-          role === 'owner'
+          organizationRole === 'owner'
             ? {
                 organization:
                   form.organization,
@@ -131,7 +131,7 @@ export default function useSettings() {
     saved,
 
     canEditOrganization:
-      role === 'owner',
+      organizationRole === 'owner',
     canManageDoctors:
       canManageSettings,
     updateBranch,

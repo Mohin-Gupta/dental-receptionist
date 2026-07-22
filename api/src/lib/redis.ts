@@ -5,11 +5,8 @@ const redisUrl = process.env.REDIS_URL;
 if (!redisUrl) throw new Error('REDIS_URL not set');
 
 export const redis = new Redis(redisUrl, {
-  maxRetriesPerRequest: null, // required for BullMQ
+  // This connection serves request-path state and security controls, not
+  // BullMQ. Bound retries so an unavailable Redis cannot hang HTTP requests.
+  maxRetriesPerRequest: 1,
+  connectTimeout: 5_000,
 });
-
-export const redisConnection = {
-  connection: new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-  }),
-};

@@ -1,4 +1,12 @@
+.git
+.gitignore
 node_modules
 dist
+coverage
+.nyc_output
 .env
+.env.*
+!.env.example
 *.log
+npm-debug.log*
+.DS_Store

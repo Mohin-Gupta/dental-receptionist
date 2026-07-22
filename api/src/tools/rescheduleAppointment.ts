@@ -1,147 +1,103 @@
+import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { deleteCalendarEvent, createCalendarEvent } from '../services/googleCalendar';
-import { toClinicTimeString, addMinutesToClinicString, formatInTimezone, getClinicTimezone } from '../lib/timezone';
-import { normalizeTime, toReadableTime, toReadableDate } from './helpers';
-import { cancelReminders, scheduleReminders } from '../queues/reminderQueue';
-import { resolveDoctorForClinic } from '../services/doctors';
+import { formatInTimezone } from '../lib/timezone';
+import {
+  AppointmentCommandError,
+  rescheduleAppointmentCommand,
+} from '../services/appointmentCommands';
+import {
+  CALLER_VERIFICATION_REQUIRED,
+  isVerifiedCallPatient,
+} from './callerVerification';
+
+const rescheduleAppointmentSchema = z.object({
+  appointmentId: z.string().trim().uuid(),
+  newDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/),
+  newTime: z.string().trim().min(1).max(20),
+  doctorId: z.preprocess(
+    value => (value === null || value === '' ? undefined : value),
+    z.string().uuid().optional()
+  ),
+}).strict();
 
 export async function rescheduleAppointment(
   clinicId: string,
-  parameters: any
+  callId: string,
+  parameters: unknown,
+  callerNumber?: string
 ): Promise<string> {
-  const { appointmentId, newDate, newTime } = parameters;
-
-  console.log('=== RESCHEDULE START ===');
-  console.log('appointmentId:', appointmentId);
-  console.log('newDate:', newDate);
-  console.log('newTime:', newTime);
-
-  if (!appointmentId || !newDate || !newTime) {
-    return 'Missing details — need appointmentId, newDate, and newTime.';
+  const parsed = rescheduleAppointmentSchema.safeParse(parameters);
+  if (!parsed.success) {
+    return 'Missing or invalid details. A verified appointment, date in YYYY-MM-DD format, and valid time are required.';
   }
 
-  const cleanId   = appointmentId.replace(/['"]/g, '').trim();
-  const finalTime = normalizeTime(newTime);
-
-  const [year, month, day] = newDate.split('-').map(Number);
-  const [hour, min]        = finalTime.split(':').map(Number);
-
-  console.log('Parsed:', { year, month, day, hour, min });
-
-  // Load clinic timezone once
-  const timezone = await getClinicTimezone(clinicId);
-
-  const startAtStr  = toClinicTimeString(year, month, day, hour, min, timezone);
-  const endAtStr    = addMinutesToClinicString(startAtStr, 30, timezone);
-  const startAtDate = new Date(startAtStr);
-  const endAtDate   = new Date(endAtStr);
-
-  console.log(`startAtStr (${timezone}):`, startAtStr);
-  console.log('startAtDate valid:', !isNaN(startAtDate.getTime()));
-
-  if (isNaN(startAtDate.getTime())) {
-    return 'Could not parse the new date or time. Please ask patient to confirm the new slot.';
-  }
-
-  const oldAppointment = await prisma.appointment.findFirst({
-    where: { id: cleanId, clinicId },
-    include: { patient: true, clinic: true },
-  });
-
-  console.log('Found appointment:', oldAppointment ? 'yes' : 'no');
-
-  if (!oldAppointment) {
-    return `Appointment not found for ID: ${cleanId}. Ask patient to confirm the details.`;
-  }
-
-  // Already cancelled guard
-  if (oldAppointment.status === 'cancelled') {
-    const newAppt = await prisma.appointment.findFirst({
-      where: {
-        patientId: oldAppointment.patientId,
-        clinicId,
-        status: 'scheduled',
-        startAt: { gte: new Date() },
-        createdAt: { gt: oldAppointment.createdAt },
+  const appointment = await prisma.appointment.findFirst({
+    where: { id: parsed.data.appointmentId, clinicId },
+    include: {
+      patient: { select: { name: true, phone: true } },
+      clinic: {
+        select: {
+          organizationId: true,
+          timezone: true,
+          defaultCallingCode: true,
+        },
       },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (newAppt) {
-      const readableTime = toReadableTime(hour, min);
-      const readableDate = toReadableDate(newDate);
-      const firstName = oldAppointment.patient.name.split(' ')[0];
-      return `Already rescheduled. Say EXACTLY: "All done, ${firstName}. Your ${oldAppointment.reason} has been moved to ${readableDate} at ${readableTime}. We will send you a reminder. Is there anything else I can help you with?" If no or bye say "Take care" and end the call.`;
-    }
-  }
-
-  const doctor = await resolveDoctorForClinic(
-    oldAppointment.organizationId,
-    clinicId,
-    parameters.doctorId ?? oldAppointment.doctorId
-  );
-
-  // Delete old calendar event
-  if (oldAppointment.googleEventId) {
-    try {
-      await deleteCalendarEvent(clinicId, oldAppointment.googleEventId, oldAppointment.doctorId);
-      console.log('Old calendar event deleted ✓');
-    } catch (err: any) {
-      console.warn('Calendar delete failed (non-fatal):', err?.message);
-    }
-  }
-
-  // Cancel old appointment + reminders
-  await prisma.appointment.update({ where: { id: cleanId }, data: { status: 'cancelled' } });
-  await cancelReminders(cleanId);
-  console.log('Old appointment cancelled ✓');
-
-  // Create new calendar event
-  let googleEventId = '';
-  try {
-    googleEventId = await createCalendarEvent(clinicId, {
-      doctorId:     doctor.id,
-      patientName:  oldAppointment.patient.name,
-      patientPhone: oldAppointment.patient.phone,
-      reason:       oldAppointment.reason,
-      startAt:      startAtStr,
-      endAt:        endAtStr,
-    });
-    console.log('New calendar event created ✓', googleEventId);
-  } catch (err: any) {
-    console.error('Calendar create failed:', err?.message);
-  }
-
-  // Create new appointment in DB
-  const newAppointment = await prisma.appointment.create({
-    data: {
-      organizationId: oldAppointment.organizationId,
-      clinicId,
-      doctorId:     doctor.id,
-      patientId:    oldAppointment.patientId,
-      reason:       oldAppointment.reason,
-      startAt:      startAtDate,
-      endAt:        endAtDate,
-      status:       'scheduled',
-      googleEventId,
     },
   });
-  console.log('New appointment created ✓', newAppointment.id);
 
-  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
-  await scheduleReminders(
-    newAppointment.id,
-    oldAppointment.patient.phone,
-    oldAppointment.patient.name,
-    clinic?.name ?? 'the clinic',
-    startAtDate
-  );
+  if (
+    !appointment ||
+    appointment.organizationId !== appointment.clinic.organizationId ||
+    !(await isVerifiedCallPatient(clinicId, callId, appointment.patientId))
+  ) {
+    return CALLER_VERIFICATION_REQUIRED;
+  }
 
-  console.log('=== RESCHEDULE COMPLETE ===');
+  const operationKey = [
+    'call',
+    callId,
+    appointment.id,
+    parsed.data.newDate,
+    parsed.data.newTime,
+    parsed.data.doctorId ?? appointment.doctorId,
+  ].join(':');
 
-  const readableTime = toReadableTime(hour, min);
-  const readableDate = toReadableDate(newDate);
-  const firstName    = oldAppointment.patient.name.split(' ')[0];
-
-  return `Rescheduled successfully. Say EXACTLY: "All done, ${firstName}. Your ${oldAppointment.reason} has been moved to ${readableDate} at ${readableTime}. We will send you a reminder. Is there anything else I can help you with?" If no or bye say "Take care" and end the call.`;
+  try {
+    const result = await rescheduleAppointmentCommand({
+      organizationId: appointment.organizationId,
+      clinicId,
+      appointmentId: appointment.id,
+      newDate: parsed.data.newDate,
+      newTime: parsed.data.newTime,
+      doctorId: parsed.data.doctorId,
+      idempotencyKey: operationKey,
+      source: 'voice',
+    });
+    const { readableDate, readableTime } = formatInTimezone(
+      result.appointment.startAt,
+      appointment.clinic.timezone
+    );
+    const firstName = appointment.patient.name.trim().split(/\s+/)[0] || 'there';
+    const prefix = result.duplicate ? 'Already rescheduled.' : 'Rescheduled successfully.';
+    return `${prefix} Say EXACTLY: "All done, ${firstName}. Your appointment has been moved to ${readableDate} at ${readableTime}. We will send you a reminder. Is there anything else I can help you with?" If no or bye say "Take care" and end the call.`;
+  } catch (error) {
+    if (error instanceof AppointmentCommandError) {
+      if (error.code === 'slot_unavailable') {
+        return 'That requested slot is no longer available. Ask the patient to choose another available time.';
+      }
+      if (error.code === 'invalid_input') {
+        return 'Could not use the new date or time. Ask the patient to choose another future slot.';
+      }
+      if (error.code === 'organization_inactive' || error.code === 'commercial_access') {
+        return 'Automatic rescheduling is temporarily unavailable. Offer to have clinic staff call back.';
+      }
+      if (error.code === 'not_active' || error.code === 'not_found') {
+        return 'That verified appointment can no longer be rescheduled automatically. Offer to have clinic staff call back.';
+      }
+      if (error.code === 'concurrent_change') {
+        return 'That appointment changed while I was processing it. Do not retry the change; offer to have clinic staff call back.';
+      }
+    }
+    throw error;
+  }
 }

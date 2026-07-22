@@ -3,14 +3,24 @@ import type { AuthRole, Permission } from './types';
 const ROLE_PERMISSIONS: Record<AuthRole, Permission[]> = {
   owner: [
     'dashboard:read',
+    'phi:read',
     'appointments:write',
     'settings:read',
     'settings:write',
     'users:manage',
     'integrations:manage',
+    'billing:read',
+    'billing:write',
   ],
-  admin: ['dashboard:read', 'appointments:write', 'settings:read', 'settings:write'],
-  staff: ['dashboard:read', 'appointments:write'],
+  admin: [
+    'dashboard:read',
+    'phi:read',
+    'appointments:write',
+    'settings:read',
+    'settings:write',
+    'billing:read',
+  ],
+  staff: ['dashboard:read', 'phi:read', 'appointments:write'],
   viewer: ['dashboard:read'],
 };
 

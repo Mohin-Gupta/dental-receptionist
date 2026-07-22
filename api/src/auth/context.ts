@@ -74,13 +74,14 @@ export async function buildAuthContextForUser(
         include: {
           organization: {
             include: {
-              clinics: { orderBy: { createdAt: 'asc' } },
+              clinics: { where: { status: 'active' }, orderBy: { createdAt: 'asc' } },
             },
           },
         },
         orderBy: { createdAt: 'asc' },
       },
       memberships: {
+        where: { clinic: { status: 'active' } },
         include: {
           clinic: { include: { organization: true } },
         },
@@ -114,7 +115,7 @@ export async function buildAuthContextForUser(
     if (!isAuthRole(membership.role)) continue;
 
     const role = membership.role;
-    clinicRoleById.set(membership.clinicId,role);
+    clinicRoleById.set(membership.clinicId, role);
     setOrganization(organizationsById, membership.clinic.organization, null);
     setClinic(clinicsById, membership.clinic);
   }

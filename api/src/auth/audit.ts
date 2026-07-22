@@ -4,9 +4,10 @@ import { prisma } from '../lib/prisma';
 import type { RequestMeta } from './types';
 
 export function getRequestMeta(req: Request): RequestMeta {
-  const forwardedFor = req.header('x-forwarded-for')?.split(',')[0]?.trim();
   return {
-    ipAddress: forwardedFor || req.ip,
+    // Express derives this from the configured trusted-proxy hop count. Never
+    // parse X-Forwarded-For independently or a direct client can spoof it.
+    ipAddress: req.ip,
     userAgent: req.header('user-agent') ?? undefined,
   };
 }
@@ -41,6 +42,37 @@ export async function auditAction(
   } catch (err: any) {
     console.warn('Audit log failed:', err?.message);
   }
+}
+
+/**
+ * Records a disclosure that must exist before protected data is returned.
+ * PHI endpoints fail closed if the audit store is unavailable instead of
+ * serving sensitive data without an access record.
+ */
+export async function auditRequired(
+  req: Request,
+  action: string,
+  options: {
+    targetType?: string;
+    targetId?: string;
+    metadata?: Record<string, unknown>;
+  } = {}
+): Promise<void> {
+  if (!req.auth) throw new Error('Authenticated audit context is required');
+  const meta = getRequestMeta(req);
+  await prisma.auditLog.create({
+    data: {
+      userId: req.auth.userId,
+      organizationId: req.auth.organizationId,
+      clinicId: req.auth.clinicId,
+      action,
+      targetType: options.targetType,
+      targetId: options.targetId,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: options.metadata as Prisma.InputJsonValue | undefined,
+    },
+  });
 }
 
 export async function securityEvent(

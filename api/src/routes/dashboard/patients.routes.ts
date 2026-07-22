@@ -1,46 +1,73 @@
-import { Router, Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
 import { requirePermission } from '../../auth/middleware';
+import { z } from 'zod';
+import { createRouter } from '../../lib/asyncRouter';
+import { auditRequired } from '../../auth/audit';
 
-const router = Router();
+const router = createRouter();
 
-router.get('/dashboard/patients', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+const patientQuerySchema = z.object({
+  search: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+router.get('/dashboard/patients', requirePermission('phi:read'), async (req: Request, res: Response) => {
   const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
-  const { search, page = '1', limit = '20' } = req.query;
+  const parsed = patientQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid patient query' });
+  const { search, page, limit } = parsed.data;
 
   type PatientWhere = {
     organizationId: string;
+    AND?: unknown[];
     OR?: { name?: { contains: string; mode: 'insensitive' }; phone?: { contains: string } }[];
   };
 
-  const where: PatientWhere = search
+  const accessScope = {
+    OR: [
+      { clinicId },
+      { appointments: { some: { organizationId, clinicId } } },
+    ],
+  };
+  const where = search
     ? {
         organizationId,
-        OR: [
-          { name: { contains: search as string, mode: 'insensitive' } },
-          { phone: { contains: search as string } },
+        AND: [
+          accessScope,
+          {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' as const } },
+              { phone: { contains: search } },
+            ],
+          },
         ],
       }
-    : { organizationId };
+    : { organizationId, ...accessScope };
 
-  const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
+  const skip = (page - 1) * limit;
 
   const [patients, total] = await Promise.all([
     prisma.patient.findMany({
       where,
       include: {
         appointments: { where: { clinicId }, orderBy: { startAt: 'desc' }, take: 1 },
-        _count: { select: { appointments: true } },
+        _count: { select: { appointments: { where: { organizationId, clinicId } } } },
       },
       orderBy: { createdAt: 'desc' },
       skip,
-      take: parseInt(limit as string),
+      take: limit,
     }),
     prisma.patient.count({ where }),
   ]);
 
-  res.json({ patients, total });
+  await auditRequired(req, 'phi.patients_list_viewed', {
+    targetType: 'Patient',
+    metadata: { page, resultCount: patients.length, searchUsed: Boolean(search) },
+  });
+  res.json({ patients, total, page, limit });
 });
 
 export default router;

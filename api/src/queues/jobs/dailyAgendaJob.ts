@@ -26,15 +26,15 @@ export async function runDailyAgendaJob(
       where: { id: clinicId },
       include: {
         doctors: { include: { doctor: true } },
+        organization: { select: { status: true } },
       },
     });
 
-  if (!clinic) {
-    console.log(
-      'Clinic not found — skipping agenda'
-    );
-    return;
-  }
+  if (
+    !clinic ||
+    clinic.status !== 'active' ||
+    !['active', 'past_due_grace'].includes(clinic.organization.status)
+  ) return;
 
   const timezone =
     clinic.timezone ??
@@ -74,15 +74,11 @@ export async function runDailyAgendaJob(
 
   const doctors = clinic.doctors.map((entry) => entry.doctor).filter((doctor) => doctor.status === 'active');
   if (doctors.length === 0) {
-    console.log('No active doctors assigned — skipping agenda');
     return;
   }
 
   for (const doctor of doctors) {
-    if (!doctor.phone) {
-      console.log(`No phone for ${doctor.name} — skipping agenda`);
-      continue;
-    }
+    if (!doctor.phone) continue;
 
     const appointments =
       await prisma.appointment.findMany({
@@ -100,52 +96,57 @@ export async function runDailyAgendaJob(
             lt: todayEnd,
           },
         },
-        include: {
-          patient: true,
-        },
+        select: { startAt: true },
         orderBy: {
           startAt: 'asc',
         },
       });
 
-    const doctorPhone =
-      doctor.phone.startsWith('+')
-        ? doctor.phone
-        : `+91${doctor.phone}`;
-
     if (appointments.length === 0) {
       await sendSMS(
-        doctorPhone,
-        `Good morning ${doctor.name}. No appointments scheduled for today at ${clinic.name}. Have a great day! Do not reply to this message.`
+        {
+          organizationId: clinic.organizationId,
+          clinicId: clinic.id,
+          idempotencyKey: `clinic:${clinic.id}:agenda:${today}:doctor:${doctor.id}:sms:v1`,
+          purpose: 'daily_agenda',
+          defaultCallingCode: clinic.defaultCallingCode,
+        },
+        doctor.phone,
+        `Good morning ${doctor.name}. No appointments scheduled for today at ${clinic.name}. Have a great day! Reply STOP to opt out.`
       );
       continue;
     }
 
-    const agendaList =
+    // Keep patient names and visit reasons out of ordinary SMS. The secure
+    // dashboard remains the source for patient-level agenda details.
+    const agendaTimes =
       appointments
-        .map((a, i) => {
+        .map((appointment) => {
         const {
           readableTime,
         } = formatInTimezone(
-          a.startAt,
+          appointment.startAt,
           timezone
         );
 
-        return `${i + 1}. ${
-          a.patient.name
-        } at ${readableTime} — ${
-          a.reason
-        }`;
+        return readableTime;
         })
-        .join('. ');
+        .join(', ');
 
     await sendSMS(
-      doctorPhone,
-      `Good morning ${doctor.name}. Today's schedule at ${clinic.name}: ${agendaList}. Total: ${appointments.length} appointment${
+      {
+        organizationId: clinic.organizationId,
+        clinicId: clinic.id,
+        idempotencyKey: `clinic:${clinic.id}:agenda:${today}:doctor:${doctor.id}:sms:v1`,
+        purpose: 'daily_agenda',
+        defaultCallingCode: clinic.defaultCallingCode,
+      },
+      doctor.phone,
+      `Good morning ${doctor.name}. You have ${appointments.length} appointment${
         appointments.length > 1
           ? 's'
           : ''
-      }. Do not reply to this message.`
+      } today at ${clinic.name}, at: ${agendaTimes}. Sign in to the secure dashboard for patient details. Reply STOP to opt out.`
     );
   }
 
@@ -157,8 +158,4 @@ export async function runDailyAgendaJob(
       lastAgendaSentDate: today,
     },
   });
-
-  console.log(
-    `Daily agenda processed for ${doctors.length} doctor(s)`
-  );
 }

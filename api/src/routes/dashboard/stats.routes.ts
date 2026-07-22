@@ -1,11 +1,13 @@
-import { Router, Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
 import { getTodayRangeInTimezone, getClinicTimezone } from '../../lib/timezone';
 import { requirePermission } from '../../auth/middleware';
+import { createRouter } from '../../lib/asyncRouter';
+import { auditRequired } from '../../auth/audit';
 
-const router = Router();
+const router = createRouter();
 
-router.get('/dashboard/stats', requirePermission('dashboard:read'), async (req: Request, res: Response) => {
+router.get('/dashboard/stats', requirePermission('phi:read'), async (req: Request, res: Response) => {
   const organizationId = req.auth!.organizationId;
   const clinicId = req.auth!.clinicId;
 
@@ -23,29 +25,34 @@ router.get('/dashboard/stats', requirePermission('dashboard:read'), async (req: 
     todayAppointmentsList,
   ] = await Promise.all([
     prisma.appointment.count({
-      where: { clinicId, startAt: { gte: todayStart, lt: todayEnd }, status: { in: ['scheduled', 'confirmed'] } },
+      where: { organizationId, clinicId, startAt: { gte: todayStart, lt: todayEnd }, status: { in: ['scheduled', 'confirmed'] } },
     }),
     prisma.appointment.count({
-      where: { clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } },
+      where: { organizationId, clinicId, startAt: { gte: now }, status: { in: ['scheduled', 'confirmed'] } },
     }),
     prisma.appointment.count({
       // Time-based, not dependent on the hourly status-updater cron job
       where: {
-        clinicId,
+        organizationId, clinicId,
         endAt: { lt: now },
         status: { in: ['scheduled', 'confirmed', 'completed'] },
       },
     }),
     prisma.appointment.count({
-      where: { clinicId, status: 'cancelled' },
+      where: { organizationId, clinicId, status: 'cancelled' },
     }),
-    prisma.patient.count({ where: { organizationId } }),
+    prisma.patient.count({
+      where: {
+        organizationId,
+        OR: [{ clinicId }, { appointments: { some: { organizationId, clinicId } } }],
+      },
+    }),
     prisma.callLog.count({
-      where: { clinicId, createdAt: { gte: todayStart, lt: todayEnd } },
+      where: { organizationId, clinicId, createdAt: { gte: todayStart, lt: todayEnd } },
     }),
     prisma.appointment.findMany({
       where: {
-        clinicId,
+        organizationId, clinicId,
         startAt: { gte: todayStart, lt: todayEnd },
         status: { in: ['scheduled', 'confirmed'] },
       },
@@ -54,6 +61,10 @@ router.get('/dashboard/stats', requirePermission('dashboard:read'), async (req: 
     }),
   ]);
 
+  await auditRequired(req, 'phi.dashboard_summary_viewed', {
+    targetType: 'Appointment',
+    metadata: { resultCount: todayAppointmentsList.length },
+  });
   res.json({
     todayAppointments,
     upcomingAppointments,

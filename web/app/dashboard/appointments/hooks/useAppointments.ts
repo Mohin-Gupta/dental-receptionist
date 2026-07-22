@@ -45,6 +45,10 @@ export default function useAppointments() {
               page,
               limit: 20,
             },
+            headers: {
+              ...(activeOrganizationId ? { 'X-Organization-Id': activeOrganizationId } : {}),
+              ...(activeClinicId ? { 'X-Clinic-Id': activeClinicId } : {}),
+            },
           }
         )
         .then((response) => {
