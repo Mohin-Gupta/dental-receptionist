@@ -71,6 +71,49 @@ export async function authRateLimit(req: Request, res: Response, next: NextFunct
 }
 
 /**
+ * Authenticated MFA mutations need a user/session key as well as an IP key.
+ * This prevents a distributed set of IPs from brute-forcing one account while
+ * retaining the shared-IP protection used by the public login limiter.
+ */
+export async function mfaRateLimit(req: Request, res: Response, next: NextFunction) {
+  if (!req.auth) return res.status(401).json({ error: 'Authentication required' });
+  const windowMs = 10 * 60 * 1000;
+  const accountLimit = 10;
+  const dimensions = [
+    { key: `rate:mfa:ip:${digest(req.ip || 'unknown')}`, limit: 100 },
+    { key: `rate:mfa:user:${digest(req.auth.userId)}`, limit: accountLimit },
+    { key: `rate:mfa:session:${digest(req.auth.sessionId)}`, limit: accountLimit },
+  ];
+
+  try {
+    const counters = await Promise.all(dimensions.map(async dimension => ({
+      ...dimension,
+      ...await increment(dimension.key, windowMs),
+    })));
+    const accountCounters = counters.slice(1);
+    const remaining = Math.min(...accountCounters.map(counter => (
+      Math.max(0, counter.limit - counter.count)
+    )));
+    const resetSeconds = Math.max(...accountCounters.map(counter => Math.ceil(counter.ttl / 1000)));
+    const blocked = counters.filter(counter => counter.count > counter.limit);
+    res.setHeader('RateLimit-Limit', String(accountLimit));
+    res.setHeader('RateLimit-Remaining', String(remaining));
+    res.setHeader('RateLimit-Reset', String(resetSeconds));
+    if (blocked.length > 0) {
+      const retryAfter = Math.max(...blocked.map(counter => Math.ceil(counter.ttl / 1000)));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Too many MFA attempts. Please try again later.' });
+    }
+    return next();
+  } catch {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'MFA security controls are temporarily unavailable' });
+    }
+    return next();
+  }
+}
+
+/**
  * Cheap pre-body protection for public provider endpoints. Provider
  * cryptographic verification remains authoritative; this only limits request
  * amplification before JSON/urlencoded parsing and signature checks.

@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { cleanupConsumedAuthTokens } from './auth/tokenCleanup';
+import { cleanupExpiredAuthenticationState } from './auth/tokenCleanup';
 import {
   exportPendingStripeUsage,
   expireElapsedBillingGrace,
@@ -90,7 +90,7 @@ async function main() {
     startNonOverlappingTask(
       'Authentication token cleanup',
       15 * 60 * 1000,
-      cleanupConsumedAuthTokens
+      cleanupExpiredAuthenticationState
     ),
     startNonOverlappingTask(
       'Sensitive payload retention',

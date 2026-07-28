@@ -128,6 +128,7 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   mfaMethods              MfaMethod[]
+  mfaEnrollmentChallenge  MfaEnrollmentChallenge?
   doctorProfiles          Doctor[]
   auditLogs               AuditLog[]
   securityEvents          SecurityEvent[]
@@ -168,20 +169,23 @@ model ClinicMembership {
 }
 
 model Session {
-  id            String    @id @default(uuid())
-  userId        String
-  tokenHash     String    @unique
-  csrfTokenHash String?
-  mfaVerifiedAt DateTime?
-  expiresAt     DateTime
-  lastSeenAt    DateTime  @default(now())
-  revokedAt     DateTime?
-  ipAddress     String?
-  userAgent     String?
-  createdAt     DateTime  @default(now())
+  id                String    @id @default(uuid())
+  userId            String
+  tokenHash         String    @unique
+  csrfTokenHash     String?
+  mfaVerifiedAt     DateTime?
+  mfaVerifiedMethod String?
+  expiresAt         DateTime
+  lastSeenAt        DateTime  @default(now())
+  revokedAt         DateTime?
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mfaEnrollmentChallenges MfaEnrollmentChallenge[]
 
+  @@unique([id, userId])
   @@index([userId, expiresAt])
 }
 
@@ -334,17 +338,41 @@ model OrganizationRegistrationRequest {
 }
 
 model MfaMethod {
-  id            String    @id @default(uuid())
-  userId        String
-  type          String
-  secret        String?
-  recoveryCodes Json?
-  enabledAt     DateTime?
-  createdAt     DateTime  @default(now())
+  id                       String    @id @default(uuid())
+  userId                   String
+  type                     String
+  secret                   String?
+  recoveryCodes            Json?
+  recoveryCodesGeneratedAt DateTime?
+  lastRecoveryCodeUsedAt   DateTime?
+  version                  Int       @default(0)
+  enabledAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @default(now()) @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, type])
+}
+
+/// A short-lived, session-bound TOTP enrollment. Keeping this separate means
+/// an abandoned replacement never disables the user's current authenticator.
+model MfaEnrollmentChallenge {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  sessionId    String
+  purpose      String
+  secret       String
+  attemptCount Int      @default(0)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([expiresAt])
 }
 
 model AuditLog {

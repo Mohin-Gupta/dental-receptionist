@@ -19,6 +19,7 @@ import {
   CreditCard,
   PlugZap,
   UsersRound,
+  ShieldCheck,
 } from 'lucide-react';
 
 const navItems = [
@@ -163,6 +164,14 @@ function SidebarContent({
       </nav>
 
       <div className="px-4 py-4 border-t border-gray-800">
+        <Link
+          href="/mfa"
+          onClick={closeMenu}
+          className="mb-3 flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-gray-400 hover:bg-gray-800 hover:text-white"
+        >
+          <ShieldCheck className="h-4 w-4" />
+          Account security
+        </Link>
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-xs font-semibold text-gray-300">
             {name?.charAt(0).toUpperCase() ?? 'U'}

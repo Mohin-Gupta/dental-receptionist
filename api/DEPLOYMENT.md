@@ -78,6 +78,21 @@ For every release:
 
 Schema changes should remain backward-compatible across a rolling release. If a release fails after a migration, roll application containers forward or back only when the old version is schema-compatible. Database restore is the last-resort rollback and must follow the restore procedure below.
 
+### MFA hardening release cutover
+
+The release containing `20260723090000_mfa_recovery_hardening` needs a brief
+authentication maintenance gate even though its schema expansion is compatible
+with old replicas. Old and new replicas use different MFA locks and setup
+contracts, so they must not serve login/setup/verification concurrently.
+
+Before running this migration, make the ingress return a maintenance response
+for `/api/auth/login` and every `/api/auth/mfa/*` path. Keep webhook and normal
+authenticated application traffic online. Run the migration, deploy the new API
+pool, wait until every old API replica has fully drained, then deploy the new web
+image. Smoke-test password + TOTP login, recovery login, and replacement against
+the new pool before removing the authentication gate. Do not describe this
+specific release as an ordinary mixed-version rolling deployment.
+
 ## 4. Health, scaling, and alerts
 
 - `GET /health` and `GET /health/live` are process liveness checks and do not call dependencies.
@@ -177,6 +192,44 @@ Verify SMTP SPF, DKIM, DMARC, bounce handling, and a monitored reply/abuse path.
 Budget-alert deliveries are durable per recipient and protected by worker leases, but SMTP has no end-to-end idempotency key. A worker crash after the SMTP server accepts a message and before the database acknowledgement can therefore produce a duplicate on retry. Either accept that at-least-once behavior and make the message harmless when repeated, or replace SMTP for alerts with a transactional provider that supports application-supplied idempotency keys.
 
 ## 6. Encryption and secret rotation
+
+### MFA recovery operations
+
+Authenticator replacement is self-service and fail-safe: a password-confirmed,
+session-bound enrollment challenge expires after `MFA_ENROLLMENT_TTL_MINUTES`,
+and the active authenticator remains valid until the new code is verified. A
+recovery-code login is recorded on that exact session so the dashboard can
+direct the user to replacement. Activation atomically rotates the secret and
+all recovery codes. Users can also regenerate recovery codes, revoke every
+other session, and disable MFA only when account/owner policy does not require
+it.
+
+The first MFA hardening migration is structurally backward-compatible, but old
+and new MFA behavior is not safe to mix; follow the authentication-gated
+cutover in section 3. Legacy sessions can temporarily have `mfaVerifiedAt`
+without `mfaVerifiedMethod`; the application treats those sessions as
+provenance-unknown and recommends replacement. New replicas always write both
+fields. In a later release, after confirming no old replica can write sessions,
+clear method-less verification timestamps and tighten
+`Session_mfa_verification_pair_check` to require a method for every verification
+timestamp.
+
+MFA is attached to the global user identity, not one organization. Therefore a
+tenant administrator must never reset another member's MFA: that would alter
+the member's access to every tenant. This release intentionally provides no
+tenant-admin reset or static support-token bypass. Owner recovery requires a
+separate operator control plane with operator SSO/phishing-resistant MFA,
+identity-recovery permission, two-person approval, a ticket/reason, expiring
+one-use recovery grants, user notification, and immutable audit records. Until
+that control plane exists, there is deliberately no operation that restores an
+account after both its authenticator and every recovery code are lost. Record
+and escalate the incident, but do not edit MFA rows directly in production or
+promise support-assisted account recovery in a customer SLA. Shipping such an
+SLA requires the operator recovery control plane first.
+
+Treat QR data, `otpauth` URIs, TOTP secrets, passwords, and raw recovery codes
+as secrets. Exclude them from request logging, analytics, traces, support tools,
+screenshots, and backups exported outside the approved security boundary.
 
 `DATA_ENCRYPTION_KEYS` is a JSON keyring of Base64-encoded 32-byte AES keys. Encrypted values record their key ID; all API and worker replicas must receive the same keyring.
 
