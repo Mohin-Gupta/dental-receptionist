@@ -54,6 +54,7 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
   validateIntegerSetting('URLENCODED_BODY_LIMIT_BYTES', 262_144, 1_024, 10_485_760);
   validateIntegerSetting('MFA_SENSITIVE_WINDOW_MINUTES', 30, 1, 24 * 60);
   validateIntegerSetting('MFA_ENROLLMENT_TTL_MINUTES', 10, 5, 30);
+  validateIntegerSetting('SMTP_PORT', 587, 1, 65_535);
   getOperationsConfig({
     requireBearerToken: process.env.NODE_ENV === 'production' && processRole === 'api',
   });

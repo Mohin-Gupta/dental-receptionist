@@ -19,10 +19,13 @@ function getTransport() {
     host,
     port,
     secure: port === 465,
+    requireTLS: port !== 465,
     auth: { user, pass },
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 60_000,
+    disableFileAccess: true,
+    disableUrlAccess: true,
   });
 }
 
