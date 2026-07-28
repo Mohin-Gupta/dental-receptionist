@@ -41,6 +41,8 @@ jobs:
           cache: npm
           cache-dependency-path: api/package-lock.json
       - run: npm ci
+      - name: Audit API and migration dependencies
+        run: npm audit
       - run: npx prisma validate
       - run: npx prisma generate
       - run: npx prisma migrate deploy
@@ -59,5 +61,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Audit web production dependencies
+        run: npm audit --omit=dev
       - run: npm run lint
       - run: npm run build
