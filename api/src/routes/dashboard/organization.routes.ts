@@ -74,8 +74,7 @@ function requireOrganizationOwner(req: Request, res: Response, next: NextFunctio
   return next();
 }
 
-router.get(
-  '/dashboard/organization/members',
+router.get('/dashboard/organization/members',
   requirePermission('users:manage'),
   requireOrganizationOwner,
   async (req, res) => {
@@ -152,8 +151,7 @@ router.get(
   }
 );
 
-router.patch(
-  '/dashboard/organization/members/:userId',
+router.patch('/dashboard/organization/members/:userId',
   requirePermission('users:manage'),
   requireOrganizationOwner,
   requireMfaForSensitiveAction,
@@ -303,8 +301,7 @@ router.patch(
   }
 );
 
-router.delete(
-  '/dashboard/organization/invites/:inviteId',
+router.delete('/dashboard/organization/invites/:inviteId',
   requirePermission('users:manage'),
   requireOrganizationOwner,
   requireMfaForSensitiveAction,
@@ -327,8 +324,7 @@ router.delete(
   }
 );
 
-router.get(
-  '/dashboard/organization/clinics',
+router.get('/dashboard/organization/clinics',
   requirePermission('settings:read'),
   requireOrganizationOwner,
   async (req, res) => {
@@ -363,8 +359,7 @@ router.get(
   }
 );
 
-router.patch(
-  '/dashboard/organization/clinics/:clinicId/status',
+router.patch('/dashboard/organization/clinics/:clinicId/status',
   requirePermission('settings:write'),
   requireOrganizationOwner,
   requireMfaForSensitiveAction,
@@ -522,8 +517,7 @@ router.patch(
   }
 );
 
-router.post(
-  '/dashboard/organization/clinics',
+router.post('/dashboard/organization/clinics',
   requirePermission('settings:write'),
   requireOrganizationOwner,
   requireMfaForSensitiveAction,

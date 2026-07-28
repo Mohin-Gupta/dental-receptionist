@@ -7,12 +7,14 @@ import { hashToken, safeTokenEqual } from './crypto';
 import { hasPermission } from './permissions';
 import type { Permission } from './types';
 import { acquireTenantRequestLease } from './tenantRateLimit';
+import { hasFreshMfaTimestamp } from './mfaService';
 
 const MFA_BOOTSTRAP_PATHS = new Set([
   '/auth/me',
   '/auth/csrf',
   '/auth/mfa/status',
   '/auth/mfa/setup',
+  '/auth/mfa/setup/cancel',
   '/auth/mfa/verify',
   '/auth/logout',
   '/auth/logout-all',
@@ -36,6 +38,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
             select: { id: true },
             take: 1,
           },
+          organizationMemberships: {
+            where: { role: 'owner' },
+            select: { id: true },
+            take: 1,
+          },
+          memberships: {
+            where: { role: 'owner' },
+            select: { id: true },
+            take: 1,
+          },
         },
       },
     },
@@ -51,10 +63,14 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   const isMfaBootstrapRequest = MFA_BOOTSTRAP_PATHS.has(req.path.replace(/\/$/, ''));
   const hasEnabledMfa = session.user.mfaMethods.length > 0;
+  const requiresMfa =
+    session.user.mfaRequired ||
+    session.user.organizationMemberships.length > 0 ||
+    session.user.memberships.length > 0;
   if (!isMfaBootstrapRequest && hasEnabledMfa && !session.mfaVerifiedAt) {
     return res.status(403).json({ error: 'MFA verification required', mfaRequired: true });
   }
-  if (!isMfaBootstrapRequest && session.user.mfaRequired && !hasEnabledMfa) {
+  if (!isMfaBootstrapRequest && requiresMfa && !hasEnabledMfa) {
     return res.status(403).json({ error: 'MFA setup required', mfaSetupRequired: true });
   }
 
@@ -160,11 +176,7 @@ export async function requireMfaForSensitiveAction(
 }
 
 export function hasFreshMfaVerification(verifiedAt: Date | null | undefined): boolean {
-  const configuredMinutes = Number(process.env.MFA_SENSITIVE_WINDOW_MINUTES ?? '30');
-  const windowMinutes = Number.isFinite(configuredMinutes) && configuredMinutes > 0
-    ? Math.min(configuredMinutes, 24 * 60)
-    : 30;
-  return Boolean(verifiedAt && verifiedAt.getTime() >= Date.now() - windowMinutes * 60 * 1000);
+  return hasFreshMfaTimestamp(verifiedAt);
 }
 
 export async function requireCsrf(req: Request, res: Response, next: NextFunction) {

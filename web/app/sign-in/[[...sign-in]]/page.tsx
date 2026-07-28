@@ -22,7 +22,13 @@ export default function SignInPage() {
   const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('invite') === 'accepted') {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('recovery') === '1') {
+      setUseRecoveryCode(true);
+      setNotice('Sign in with your password, then enter one of your one-time recovery codes.');
+    } else if (searchParams.get('mfa') === 'disabled') {
+      setNotice('MFA was disabled and all signed-in sessions were revoked. Sign in again to continue.');
+    } else if (searchParams.get('invite') === 'accepted') {
       setNotice('Invitation accepted. Sign in to continue; multi-factor authentication may be required.');
     }
   }, []);
@@ -47,7 +53,7 @@ export default function SignInPage() {
 
       setCsrfToken(response.data.csrfToken);
       await refresh();
-      router.replace('/dashboard');
+      router.replace(response.data?.recoveryCodeUsed === true ? '/mfa' : '/dashboard');
     } catch (err: unknown) {
       const message = axios.isAxiosError(err)
         ? err.response?.data?.error

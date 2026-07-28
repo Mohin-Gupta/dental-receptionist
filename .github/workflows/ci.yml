@@ -27,6 +27,9 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      RUN_MFA_DATABASE_TESTS: 'true'
+      DATA_ENCRYPTION_KEYS: '{"ci":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+      DATA_ENCRYPTION_ACTIVE_KEY_ID: ci
     defaults:
       run:
         working-directory: api
@@ -38,6 +41,8 @@ jobs:
           cache: npm
           cache-dependency-path: api/package-lock.json
       - run: npm ci
+      - name: Audit API and migration dependencies
+        run: npm audit
       - run: npx prisma validate
       - run: npx prisma generate
       - run: npx prisma migrate deploy
@@ -56,5 +61,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Audit web production dependencies
+        run: npm audit --omit=dev
       - run: npm run lint
       - run: npm run build

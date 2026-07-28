@@ -335,8 +335,7 @@ async function verifyActiveProviderResources(
   return admissionUpdates;
 }
 
-router.get(
-  '/dashboard/integrations',
+router.get('/dashboard/integrations',
   requirePermission('integrations:manage'),
   requireOrganizationOwner,
   async (req: Request, res: Response) => {
@@ -356,8 +355,7 @@ router.get(
   }
 );
 
-router.get(
-  '/dashboard/integrations/health',
+router.get('/dashboard/integrations/health',
   requirePermission('integrations:manage'),
   requireOrganizationOwner,
   async (req: Request, res: Response) => {
@@ -469,8 +467,8 @@ router.get(
   }
 );
 
-router.post(
-  '/dashboard/integrations/accounts',
+// create account -> twilio not vapi since vapi is created through CLI only
+router.post('/dashboard/integrations/accounts',
   ...manageIntegration,
   async (req: Request, res: Response) => {
     const organizationId = req.auth!.organizationId;
@@ -560,8 +558,9 @@ router.post(
   }
 );
 
-router.patch(
-  '/dashboard/integrations/accounts/:id',
+// activate / deactivate / provisioning / change non-secret config of the account
+// It doesn't create new provider account, change credentials, change which external twilio/vapi account it represents, manage platform controlled vapi account, directly create, delete, reassign resources
+router.patch('/dashboard/integrations/accounts/:id',
   ...manageIntegration,
   async (req: Request, res: Response) => {
     const organizationId = req.auth!.organizationId;

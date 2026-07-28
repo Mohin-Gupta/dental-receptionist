@@ -7,7 +7,7 @@ import { prisma } from '../lib/prisma';
 import { auditAction, getRequestMeta, securityEvent } from '../auth/audit';
 import { EMAIL_VERIFY_TTL_HOURS, INVITE_TTL_HOURS, PASSWORD_RESET_TTL_MINUTES } from '../auth/config';
 import { AuthSelectionError, buildAuthContextForUser } from '../auth/context';
-import { generateToken, hashPassword, hashToken, safeTokenEqual, verifyPassword } from '../auth/crypto';
+import { generateToken, hashPassword, hashToken, verifyPassword } from '../auth/crypto';
 import {
   hasFreshMfaVerification,
   requireAuth,
@@ -16,12 +16,33 @@ import {
   requireMfaForSensitiveAction,
   requirePermission,
 } from '../auth/middleware';
-import { authRateLimit } from '../auth/rateLimit';
-import { clearSessionCookie, createSession, rotateCsrfToken } from '../auth/sessions';
+import { authRateLimit, mfaRateLimit } from '../auth/rateLimit';
+import {
+  clearSessionCookie,
+  createSessionRecord,
+  rotateCsrfToken,
+  setSessionCookie,
+  type CreatedSession,
+  type MfaVerificationMethod,
+} from '../auth/sessions';
 import { sendInviteEmail, sendPasswordResetEmail, sendVerifyEmail } from '../auth/mailer';
 import { cleanupConsumedAuthTokens } from '../auth/tokenCleanup';
 import type { AuthContext } from '../auth/types';
-import { decryptSecret, encryptSecret } from '../auth/secretBox';
+import { decryptSecret } from '../auth/secretBox';
+import {
+  cancelMfaEnrollment,
+  disableMfa,
+  MfaServiceError,
+  recoveryCodeHashes,
+  recoveryCodeMatches,
+  recoveryCodesRemaining,
+  regenerateRecoveryCodes,
+  revokeOtherSessions,
+  startMfaEnrollment,
+  verifyCurrentMfa,
+  verifyMfaEnrollment,
+  type MfaEventContext,
+} from '../auth/mfaService';
 import { toE164 } from '../lib/phone';
 import { createRouter } from '../lib/asyncRouter';
 
@@ -60,7 +81,19 @@ const resetPasswordSchema = z.object({
 
 const verifyEmailSchema = z.object({ token: z.string().min(20) });
 
-const mfaVerifySchema = z.object({ code: z.string().trim().min(6).max(10) });
+const mfaVerifySchema = z.object({
+  code: z.string().trim().min(6).max(10),
+  setupId: z.string().uuid().optional(),
+}).strict();
+const mfaSetupSchema = z.object({
+  password: z.string().min(1).max(200),
+  intent: z.enum(['enroll', 'replace']),
+}).strict();
+const mfaManageSchema = z.object({
+  password: z.string().min(1).max(200),
+  code: z.string().trim().min(6).max(10),
+}).strict();
+const mfaCancelSetupSchema = z.object({ setupId: z.string().uuid() }).strict();
 
 const organizationRegistrationSchema = z.object({
   ownerName: z.string().trim().min(2).max(120),
@@ -133,29 +166,163 @@ function genericLoginError(res: Response) {
   return res.status(401).json({ error: 'Invalid email or password' });
 }
 
-async function consumeMfaRecoveryCode(userId: string, recoveryCode: string): Promise<boolean> {
-  const suppliedHash = hashToken(recoveryCode);
-  return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mfa-recovery:${userId}`}, 0))`;
-    const method = await tx.mfaMethod.findUnique({
+function mfaEventContext(req: Request): MfaEventContext {
+  const meta = getRequestMeta(req);
+  return {
+    userId: req.auth!.userId,
+    sessionId: req.auth!.sessionId,
+    organizationId: req.auth!.organizationId,
+    clinicId: req.auth!.clinicId,
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+  };
+}
+
+function mfaServiceError(res: Response, error: unknown) {
+  if (!(error instanceof MfaServiceError)) throw error;
+  return res.status(error.status).json({
+    error: error.message,
+    code: error.code,
+    ...(error.code === 'mfa_reauthentication_required' ? { mfaRequired: true } : {}),
+  });
+}
+
+type LoginCompletion =
+  | {
+      kind: 'success';
+      session: CreatedSession;
+      mfaVerifiedMethod?: MfaVerificationMethod;
+      recoveryCodesRemaining?: number;
+    }
+  | { kind: 'authentication_changed' | 'mfa_required' | 'invalid_mfa' };
+
+/**
+ * Revalidates the account and current MFA method, consumes a recovery code
+ * when applicable, and creates the resulting session in one transaction.
+ * The shared per-user MFA lock makes a retired authenticator unusable the
+ * instant replacement/disable commits.
+ */
+async function completeLogin(
+  req: Request,
+  userId: string,
+  expectedPasswordHash: string,
+  initialAuth: AuthContext,
+  factors: { totpCode?: string; recoveryCode?: string }
+): Promise<LoginCompletion> {
+  const meta = getRequestMeta(req);
+  return prisma.$transaction<LoginCompletion>(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mfa:${userId}`}, 0))`;
+
+    // Lock the identity row too. A concurrent password reset/deactivation then
+    // either wins before this check or waits and revokes the session created
+    // below; it cannot slip between revalidation and session insertion.
+    const activeUsers = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "User"
+      WHERE "id" = ${userId}
+        AND "status" = 'active'
+        AND "passwordHash" = ${expectedPasswordHash}
+        AND "emailVerifiedAt" IS NOT NULL
+      FOR UPDATE
+    `;
+    if (activeUsers.length !== 1) return { kind: 'authentication_changed' };
+
+    const fullMethod = await tx.mfaMethod.findUnique({
       where: { userId_type: { userId, type: 'totp' } },
-      select: { id: true, enabledAt: true, recoveryCodes: true },
     });
-    if (!method?.enabledAt || !Array.isArray(method.recoveryCodes)) return false;
+    if (fullMethod?.enabledAt && !fullMethod.secret) {
+      return { kind: 'authentication_changed' };
+    }
 
-    const recoveryCodes = method.recoveryCodes.filter(
-      (value): value is string => typeof value === 'string'
-    );
-    const matchedIndex = recoveryCodes.findIndex(storedHash =>
-      safeTokenEqual(storedHash, suppliedHash)
-    );
-    if (matchedIndex < 0) return false;
+    let mfaVerifiedMethod: MfaVerificationMethod | undefined;
+    let remainingCodes: string[] | undefined;
+    if (fullMethod?.enabledAt && fullMethod.secret) {
+      if (!factors.totpCode && !factors.recoveryCode) return { kind: 'mfa_required' };
 
-    await tx.mfaMethod.update({
-      where: { id: method.id },
-      data: { recoveryCodes: recoveryCodes.filter((_code, index) => index !== matchedIndex) },
+      const validTotp = Boolean(
+        factors.totpCode &&
+        authenticator.check(
+          factors.totpCode,
+          decryptSecret(fullMethod.secret, `mfa:totp:${userId}`)
+        )
+      );
+      const validRecovery = !validTotp && Boolean(
+        factors.recoveryCode && recoveryCodeMatches(fullMethod.recoveryCodes, factors.recoveryCode)
+      );
+      if (!validTotp && !validRecovery) {
+        await tx.securityEvent.create({
+          data: {
+            userId,
+            organizationId: initialAuth.organizationId,
+            clinicId: initialAuth.clinicId,
+            type: 'mfa_failed',
+            ipAddress: meta.ipAddress,
+            userAgent: meta.userAgent,
+          },
+        });
+        return { kind: 'invalid_mfa' };
+      }
+
+      mfaVerifiedMethod = validTotp ? 'totp' : 'recovery_code';
+      if (mfaVerifiedMethod === 'recovery_code') {
+        const recoveryCodes = recoveryCodeHashes(fullMethod.recoveryCodes);
+        const suppliedHash = hashToken(factors.recoveryCode!);
+        remainingCodes = recoveryCodes.filter(storedHash => storedHash !== suppliedHash);
+        // recoveryCodeMatches above used constant-time comparison. Requiring
+        // exactly one removal also fails closed if stored data is malformed.
+        if (remainingCodes.length !== recoveryCodes.length - 1) {
+          return { kind: 'invalid_mfa' };
+        }
+        await tx.mfaMethod.update({
+          where: { id: fullMethod.id },
+          data: {
+            recoveryCodes: remainingCodes,
+            lastRecoveryCodeUsedAt: new Date(),
+            version: { increment: 1 },
+          },
+        });
+      }
+    }
+
+    const session = await createSessionRecord(
+      req,
+      userId,
+      { mfaVerifiedMethod },
+      tx
+    );
+    await tx.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+    await tx.auditLog.create({
+      data: {
+        userId,
+        organizationId: initialAuth.organizationId,
+        clinicId: initialAuth.clinicId,
+        action: 'auth.login',
+        targetType: 'User',
+        targetId: userId,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        metadata: { mfaVerificationMethod: mfaVerifiedMethod ?? 'none' },
+      },
     });
-    return true;
+    if (mfaVerifiedMethod === 'recovery_code') {
+      await tx.securityEvent.create({
+        data: {
+          userId,
+          organizationId: initialAuth.organizationId,
+          clinicId: initialAuth.clinicId,
+          type: 'mfa_recovery_code_used',
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+          metadata: { recoveryCodesRemaining: remainingCodes!.length },
+        },
+      });
+    }
+    return {
+      kind: 'success',
+      session,
+      mfaVerifiedMethod,
+      ...(remainingCodes ? { recoveryCodesRemaining: remainingCodes.length } : {}),
+    };
   });
 }
 
@@ -406,7 +573,6 @@ router.post('/auth/login', authRateLimit, async (req: Request, res: Response) =>
     return res.status(403).json({ error: 'Email verification required', emailVerificationRequired: true });
   }
 
-  let mfaVerified = false;
   const totp = user.mfaMethods.find((m) => m.type === 'totp' && m.enabledAt && m.secret);
   if (totp) {
     if (!parsed.data.totpCode && !parsed.data.recoveryCode) {
@@ -421,19 +587,14 @@ router.post('/auth/login', authRateLimit, async (req: Request, res: Response) =>
         )
       : false;
 
-    let validRecovery = false;
-    if (!validTotp && parsed.data.recoveryCode) {
-      validRecovery = await consumeMfaRecoveryCode(user.id, parsed.data.recoveryCode);
-      if (validRecovery) {
-        await securityEvent(req, 'mfa_recovery_code_used', { userId: user.id });
-      }
-    }
+    const validRecoveryCandidate = !validTotp && Boolean(
+      parsed.data.recoveryCode && recoveryCodeMatches(totp.recoveryCodes, parsed.data.recoveryCode)
+    );
 
-    if (!validTotp && !validRecovery) {
+    if (!validTotp && !validRecoveryCandidate) {
       await securityEvent(req, 'mfa_failed', { userId: user.id });
       return res.status(401).json({ error: 'Invalid MFA code' });
     }
-    mfaVerified = true;
   }
 
   let initialAuth: AuthContext;
@@ -446,11 +607,37 @@ router.post('/auth/login', authRateLimit, async (req: Request, res: Response) =>
     throw err;
   }
 
-  const { csrfToken, sessionId } = await createSession(req, res, user.id, { mfaVerified });
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => undefined);
-  await auditAction(req, 'auth.login', { userId: user.id });
+  const completed = await completeLogin(
+    req,
+    user.id,
+    user.passwordHash,
+    initialAuth,
+    { totpCode: parsed.data.totpCode, recoveryCode: parsed.data.recoveryCode }
+  );
+  if (completed.kind === 'authentication_changed') {
+    await securityEvent(req, 'login_failed', { userId: user.id });
+    return genericLoginError(res);
+  }
+  if (completed.kind === 'mfa_required') {
+    await securityEvent(req, 'mfa_required', { userId: user.id });
+    return res.status(202).json({ mfaRequired: true });
+  }
+  if (completed.kind === 'invalid_mfa') {
+    return res.status(401).json({ error: 'Invalid MFA code' });
+  }
+  if (completed.kind !== 'success') return genericLoginError(res);
 
-  res.json({ ...publicAuth({ ...initialAuth, sessionId }), csrfToken });
+  setSessionCookie(res, completed.session);
+  const recoveryCodeUsed = completed.mfaVerifiedMethod === 'recovery_code';
+
+  res.json({
+    ...publicAuth({ ...initialAuth, sessionId: completed.session.sessionId }),
+    csrfToken: completed.session.csrfToken,
+    recoveryCodeUsed,
+    ...(recoveryCodeUsed
+      ? { recoveryCodesRemaining: completed.recoveryCodesRemaining }
+      : {}),
+  });
 });
 
 router.post('/auth/logout', requireAuth, requireCsrf, async (req: Request, res: Response) => {
@@ -483,25 +670,52 @@ router.get('/auth/csrf', requireAuth, async (req: Request, res: Response) => {
 });
 
 router.get('/auth/mfa/status', requireAuth, async (req: Request, res: Response) => {
-  const [user, method, session] = await Promise.all([
+  const now = new Date();
+  const [user, method, session, pendingSetup] = await Promise.all([
     prisma.user.findUnique({
       where: { id: req.auth!.userId },
-      select: { mfaRequired: true },
+      select: {
+        mfaRequired: true,
+        organizationMemberships: { where: { role: 'owner' }, select: { id: true }, take: 1 },
+        memberships: { where: { role: 'owner' }, select: { id: true }, take: 1 },
+      },
     }),
     prisma.mfaMethod.findUnique({
       where: { userId_type: { userId: req.auth!.userId, type: 'totp' } },
-      select: { enabledAt: true },
+      select: { enabledAt: true, secret: true, recoveryCodes: true },
     }),
-    prisma.session.findUnique({
-      where: { id: req.auth!.sessionId },
-      select: { mfaVerifiedAt: true },
+    prisma.session.findFirst({
+      where: {
+        id: req.auth!.sessionId,
+        userId: req.auth!.userId,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      select: { mfaVerifiedAt: true, mfaVerifiedMethod: true },
+    }),
+    prisma.mfaEnrollmentChallenge.findFirst({
+      where: {
+        userId: req.auth!.userId,
+        sessionId: req.auth!.sessionId,
+        expiresAt: { gt: now },
+      },
+      select: { id: true },
     }),
   ]);
   if (!user || !session) return res.status(401).json({ error: 'Authentication required' });
+  const requiredByPolicy =
+    user.mfaRequired || user.organizationMemberships.length > 0 || user.memberships.length > 0;
+  const enabled = Boolean(method?.enabledAt && method.secret);
+  const legacyVerifiedSession = Boolean(session.mfaVerifiedAt && !session.mfaVerifiedMethod);
   return res.json({
-    required: user.mfaRequired,
-    enabled: Boolean(method?.enabledAt),
+    required: requiredByPolicy,
+    enabled,
     sessionVerified: hasFreshMfaVerification(session.mfaVerifiedAt),
+    sessionVerificationMethod: session.mfaVerifiedMethod,
+    replacementRecommended:
+      enabled && (session.mfaVerifiedMethod === 'recovery_code' || legacyVerifiedSession),
+    recoveryCodesRemaining: enabled ? recoveryCodesRemaining(method?.recoveryCodes) : 0,
+    pendingSetup: Boolean(pendingSetup),
   });
 });
 
@@ -827,79 +1041,128 @@ router.post('/auth/verify-email', authRateLimit, async (req: Request, res: Respo
   res.json({ success: true });
 });
 
-router.post('/auth/mfa/setup', authRateLimit, requireAuth, requireCsrf, async (req: Request, res: Response) => {
-  const [existingMethod, session] = await Promise.all([
-    prisma.mfaMethod.findUnique({
-      where: { userId_type: { userId: req.auth!.userId, type: 'totp' } },
-      select: { enabledAt: true },
-    }),
-    prisma.session.findUnique({
-      where: { id: req.auth!.sessionId },
-      select: { mfaVerifiedAt: true },
-    }),
-  ]);
-  if (existingMethod?.enabledAt && !hasFreshMfaVerification(session?.mfaVerifiedAt)) {
-    return res.status(403).json({ error: 'MFA re-authentication required', mfaRequired: true });
+router.post('/auth/mfa/setup',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    const parsed = mfaSetupSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid MFA setup request' });
+    try {
+      const enrollment = await startMfaEnrollment({
+        context: mfaEventContext(req),
+        password: parsed.data.password,
+        purpose: parsed.data.intent,
+      });
+      const serviceName = process.env.APP_NAME ?? 'Dental Receptionist';
+      const otpauth = authenticator.keyuri(req.auth!.email, serviceName, enrollment.secret);
+      const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
+      return res.json({
+        setupId: enrollment.enrollmentId,
+        pendingExpiresAt: enrollment.expiresAt,
+        qrCodeDataUrl,
+        manualEntryKey: enrollment.secret,
+      });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
   }
+);
 
-  const secret = authenticator.generateSecret();
-  const serviceName = process.env.APP_NAME ?? 'Dental Receptionist';
-  const otpauth = authenticator.keyuri(req.auth!.email, serviceName, secret);
-  const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
-
-  await prisma.mfaMethod.upsert({
-    where: { userId_type: { userId: req.auth!.userId, type: 'totp' } },
-    update: { secret: encryptSecret(secret, `mfa:totp:${req.auth!.userId}`), enabledAt: null },
-    create: {
-      userId: req.auth!.userId,
-      type: 'totp',
-      secret: encryptSecret(secret, `mfa:totp:${req.auth!.userId}`),
-    },
-  });
-
-  res.json({ otpauth, qrCodeDataUrl });
-});
-
-router.post('/auth/mfa/verify', authRateLimit, requireAuth, requireCsrf, async (req: Request, res: Response) => {
-  const parsed = mfaVerifySchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid MFA code' });
-
-  const method = await prisma.mfaMethod.findUnique({
-    where: { userId_type: { userId: req.auth!.userId, type: 'totp' } },
-  });
-  if (
-    !method?.secret ||
-    !authenticator.check(
-      parsed.data.code,
-      decryptSecret(method.secret, `mfa:totp:${req.auth!.userId}`)
-    )
-  ) {
-    await securityEvent(req, 'mfa_setup_failed', { userId: req.auth!.userId });
-    return res.status(400).json({ error: 'Invalid MFA code' });
+router.post('/auth/mfa/verify',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    const parsed = mfaVerifySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid MFA code' });
+    try {
+      if (parsed.data.setupId) {
+        const activated = await verifyMfaEnrollment({
+          context: mfaEventContext(req),
+          enrollmentId: parsed.data.setupId,
+          code: parsed.data.code,
+        });
+        return res.json({ success: true, recoveryCodes: activated.recoveryCodes });
+      }
+      await verifyCurrentMfa({ context: mfaEventContext(req), code: parsed.data.code });
+      return res.json({ success: true });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
   }
+);
 
-  const firstEnrollment = !method.enabledAt;
-  const recoveryCodes = firstEnrollment
-    ? Array.from({ length: 10 }, () => generateToken(8))
-    : null;
-  if (recoveryCodes) {
-    await prisma.mfaMethod.update({
-      where: { id: method.id },
-      data: {
-        enabledAt: new Date(),
-        recoveryCodes: recoveryCodes.map(hashToken),
-      },
-    });
+router.post('/auth/mfa/setup/cancel',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    const parsed = mfaCancelSetupSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid MFA setup ID' });
+    try {
+      await cancelMfaEnrollment(mfaEventContext(req), parsed.data.setupId);
+      return res.json({ success: true });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
   }
+);
 
-  await prisma.session.update({
-    where: { id: req.auth!.sessionId },
-    data: { mfaVerifiedAt: new Date() },
-  });
+router.post('/auth/mfa/recovery-codes/regenerate',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    const parsed = mfaManageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Password and MFA code are required' });
+    try {
+      const recoveryCodes = await regenerateRecoveryCodes({
+        context: mfaEventContext(req),
+        password: parsed.data.password,
+        code: parsed.data.code,
+      });
+      return res.json({ recoveryCodes });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
+  }
+);
 
-  await auditAction(req, firstEnrollment ? 'auth.mfa_enabled' : 'auth.mfa_verified');
-  res.json({ success: true, ...(recoveryCodes ? { recoveryCodes } : {}) });
-});
+router.post('/auth/mfa/disable',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    const parsed = mfaManageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Password and MFA code are required' });
+    try {
+      const revokedSessions = await disableMfa({
+        context: mfaEventContext(req),
+        password: parsed.data.password,
+        code: parsed.data.code,
+      });
+      clearSessionCookie(res);
+      return res.json({ success: true, revokedSessions });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
+  }
+);
+
+router.post('/auth/logout-all-except-current',
+  requireAuth,
+  mfaRateLimit,
+  requireCsrf,
+  async (req: Request, res: Response) => {
+    try {
+      const revokedSessions = await revokeOtherSessions(mfaEventContext(req));
+      return res.json({ success: true, revokedSessions });
+    } catch (error) {
+      return mfaServiceError(res, error);
+    }
+  }
+);
 
 export async function createEmailVerificationToken(userId: string, email: string): Promise<void> {
   const token = generateToken(32);

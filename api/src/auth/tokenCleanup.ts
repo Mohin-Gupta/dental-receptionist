@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { cleanupExpiredMfaEnrollmentChallenges } from './mfaService';
 
 export async function cleanupConsumedAuthTokens() {
   const now = new Date();
@@ -29,4 +30,11 @@ export async function cleanupConsumedAuthTokens() {
       },
     }),
   ]);
+}
+
+/** Worker-only cleanup; keep the per-user MFA lock loop off request latency. */
+export async function cleanupExpiredAuthenticationState() {
+  const now = new Date();
+  await cleanupConsumedAuthTokens();
+  await cleanupExpiredMfaEnrollmentChallenges(250, now);
 }
