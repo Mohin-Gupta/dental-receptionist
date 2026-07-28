@@ -16,6 +16,7 @@ import { prisma } from '../lib/prisma';
  */
 
 const connection = new Redis(process.env.REDIS_URL!, {
+  family: 0,
   maxRetriesPerRequest: null,
 });
 

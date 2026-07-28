@@ -99,7 +99,10 @@ export function startReminderWorker() {
     }
     },
     {
-      connection: new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null }),
+      connection: new Redis(process.env.REDIS_URL!, {
+        family: 0,
+        maxRetriesPerRequest: null,
+      }),
       concurrency: 5,
     }
   );
