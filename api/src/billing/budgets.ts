@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { requireStripePlan } from './config';
+import { requireRazorpayPlan } from './config';
 import { RESERVABLE_USAGE_METRIC_VALUES, USAGE_METRIC_VALUES } from './metrics';
 
 const metric = z.enum(USAGE_METRIC_VALUES);
@@ -140,11 +140,13 @@ export async function saveTenantBudget(organizationId: string, input: TenantBudg
       where: { id: organizationId },
       select: {
         planTier: true,
-        billingAccount: {
+        billingAccounts: {
+          where: { activeKey: 'current' },
+          take: 1,
           select: {
             currency: true,
             subscriptions: {
-              where: { billingProvider: 'stripe', activeKey: 'current' },
+              where: { activeKey: 'current' },
               take: 1,
               select: { currentPeriodStart: true, currentPeriodEnd: true },
             },
@@ -153,6 +155,7 @@ export async function saveTenantBudget(organizationId: string, input: TenantBudg
       },
     });
     if (!organization) throw new TenantBudgetInputError('Organization not found');
+    const billingAccount = organization.billingAccounts[0] ?? null;
     if (clinicId) {
       const clinic = await tx.clinic.findFirst({
         where: { id: clinicId, organizationId, status: 'active' },
@@ -163,8 +166,8 @@ export async function saveTenantBudget(organizationId: string, input: TenantBudg
       }
     }
     if (budgetCurrency) {
-      const expectedCurrency = organization.billingAccount?.currency ??
-        requireStripePlan(organization.planTier).currency;
+      const expectedCurrency = billingAccount?.currency ??
+        requireRazorpayPlan(organization.planTier).currency;
       if (budgetCurrency !== expectedCurrency) {
         throw new TenantBudgetInputError(
           `Budget currency must match the organization billing currency (${expectedCurrency})`
@@ -172,7 +175,7 @@ export async function saveTenantBudget(organizationId: string, input: TenantBudg
       }
     }
     if (input.period === 'billing_period') {
-      const subscription = organization.billingAccount?.subscriptions[0];
+      const subscription = billingAccount?.subscriptions[0];
       const now = Date.now();
       if (
         !subscription?.currentPeriodStart ||

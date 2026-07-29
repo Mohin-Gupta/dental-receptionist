@@ -16,13 +16,15 @@ import {
 } from '../billing/budgets';
 import {
   BillingConflictError,
-  createStripeCheckoutSession,
-  createStripePortalSession,
+  BillingCheckoutVerificationError,
+  cancelRazorpaySubscription,
+  createRazorpayCheckoutSession,
+  verifyRazorpayCheckout,
 } from '../billing/checkout';
 import { getBillingSummary } from '../billing/summary';
-import { StripeApiError } from '../billing/stripeClient';
-import { StripeWebhookError } from '../billing/stripeWebhook';
-import { handleStripeWebhook } from '../billing/webhookHandler';
+import { RazorpayApiError } from '../billing/razorpayClient';
+import { RazorpayWebhookError } from '../billing/razorpayWebhook';
+import { handleRazorpayWebhook } from '../billing/webhookHandler';
 
 const router = Router();
 
@@ -48,12 +50,31 @@ const checkoutInputSchema = z.object({
   planKey: z.string().trim().regex(/^[a-z][a-z0-9_-]{0,49}$/),
 }).strict();
 
-router.post('/webhooks/stripe', asyncRoute(async (req, res) => {
-  const signature = req.header('stripe-signature');
-  if (!signature || !req.rawBody) {
-    return res.status(400).json({ error: 'Missing Stripe webhook signature' });
+const checkoutProofSchema = z.object({
+  checkoutIntentId: z.string().uuid(),
+  razorpayPaymentId: z.string().regex(/^pay_[A-Za-z0-9]+$/),
+  razorpaySubscriptionId: z.string().regex(/^sub_[A-Za-z0-9]+$/),
+  razorpaySignature: z.string().regex(/^[a-fA-F0-9]{64}$/),
+}).strict();
+
+function requireIdempotencyKey(req: Request, res: Response): string | null {
+  const value = req.header('idempotency-key')?.trim();
+  if (!value || !/^[A-Za-z0-9._:-]{8,200}$/.test(value)) {
+    res.status(400).json({
+      error: 'A stable Idempotency-Key header (8-200 safe characters) is required',
+    });
+    return null;
   }
-  const result = await handleStripeWebhook(req.rawBody, signature);
+  return value;
+}
+
+router.post('/webhooks/razorpay', asyncRoute(async (req, res) => {
+  const signature = req.header('x-razorpay-signature');
+  const eventId = req.header('x-razorpay-event-id');
+  if (!signature || !eventId || !req.rawBody) {
+    return res.status(400).json({ error: 'Missing Razorpay webhook authentication headers' });
+  }
+  const result = await handleRazorpayWebhook(req.rawBody, signature, eventId);
   return res.status(result.httpStatus).json(result.body);
 }));
 
@@ -76,22 +97,18 @@ router.post(
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid plan' });
     }
-    const clientIdempotency = req.header('idempotency-key')?.trim();
-    if (!clientIdempotency || !/^[A-Za-z0-9._:-]{8,200}$/.test(clientIdempotency)) {
-      return res.status(400).json({
-        error: 'A stable Idempotency-Key header (8-200 safe characters) is required',
-      });
-    }
+    const clientIdempotency = requireIdempotencyKey(req, res);
+    if (!clientIdempotency) return;
 
-    const session = await createStripeCheckoutSession({
+    const session = await createRazorpayCheckoutSession({
       organizationId: req.auth!.organizationId,
       planKey: parsed.data.planKey,
       requestIdempotencyKey: clientIdempotency,
     });
     await auditAction(req, 'billing.checkout_created', {
       organizationId: req.auth!.organizationId,
-      targetType: 'StripeCheckoutSession',
-      targetId: session.id,
+      targetType: 'RazorpaySubscription',
+      targetId: session.subscriptionId,
       metadata: { planKey: parsed.data.planKey },
     });
     return res.status(201).json(session);
@@ -99,17 +116,57 @@ router.post(
 );
 
 router.post(
-  '/billing/portal',
+  '/billing/checkout/verify',
   requireOrganizationBillingRole(true),
   requireMfaForSensitiveAction,
   asyncRoute(async (req, res) => {
-    const session = await createStripePortalSession(req.auth!.organizationId);
-    await auditAction(req, 'billing.portal_created', {
+    if (!requireIdempotencyKey(req, res)) return;
+    const parsed = checkoutProofSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message ?? 'Invalid Razorpay checkout proof',
+      });
+    }
+    const result = await verifyRazorpayCheckout({
       organizationId: req.auth!.organizationId,
-      targetType: 'StripePortalSession',
-      targetId: session.id,
+      ...parsed.data,
     });
-    return res.status(201).json(session);
+    await auditAction(req, 'billing.checkout_verified', {
+      organizationId: req.auth!.organizationId,
+      targetType: 'RazorpaySubscription',
+      targetId: result.subscriptionId,
+      metadata: { providerStatus: result.providerStatus },
+    });
+    return res.json(result);
+  })
+);
+
+router.post(
+  '/billing/subscription/cancel',
+  requireOrganizationBillingRole(true),
+  requireMfaForSensitiveAction,
+  asyncRoute(async (req, res) => {
+    const clientIdempotency = requireIdempotencyKey(req, res);
+    if (!clientIdempotency) return;
+    const parsed = z.object({}).strict().safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Cancellation body must be empty' });
+    }
+    const result = await cancelRazorpaySubscription(
+      req.auth!.organizationId,
+      clientIdempotency,
+      req.auth!.userId
+    );
+    await auditAction(req, 'billing.subscription_cancellation_requested', {
+      organizationId: req.auth!.organizationId,
+      targetType: 'RazorpaySubscription',
+      targetId: result.subscriptionId,
+      metadata: {
+        cancelAtPeriodEnd: result.cancelAtPeriodEnd,
+        cancellationMode: result.cancellationMode,
+      },
+    });
+    return res.status(202).json(result);
   })
 );
 
@@ -144,14 +201,23 @@ router.post(
 );
 
 const billingErrorHandler: ErrorRequestHandler = (error, req, res, _next) => {
-  if (error instanceof StripeWebhookError) {
+  if (error instanceof RazorpayWebhookError) {
     return res.status(error.statusCode).json({ error: error.message });
   }
-  if (req.path === '/webhooks/stripe') {
+  if (req.path === '/webhooks/razorpay') {
     return res.status(500).json({ error: 'Webhook processing failed' });
   }
-  if (error instanceof BillingConflictError) {
-    return res.status(error.statusCode).json({ error: error.message });
+  if (
+    error instanceof BillingConflictError ||
+    error instanceof BillingCheckoutVerificationError
+  ) {
+    return res.status(error.statusCode).json({
+      error: error.message,
+      ...(error instanceof BillingConflictError &&
+        error.idempotencyKeyDisposition
+        ? { idempotencyKeyDisposition: error.idempotencyKeyDisposition }
+        : {}),
+    });
   }
   if (error instanceof TenantBudgetInputError) {
     return res.status(error.statusCode).json({ error: error.message });
@@ -162,9 +228,12 @@ const billingErrorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (error instanceof UnknownBillingPlanError) {
     return res.status(error.statusCode).json({ error: error.message });
   }
-  if (error instanceof StripeApiError) {
+  if (error instanceof RazorpayApiError) {
     const status = error.retryable ? 503 : 502;
-    return res.status(status).json({ error: 'Billing provider request failed' });
+    return res.status(status).json({
+      error: 'Billing provider request failed',
+      idempotencyKeyDisposition: error.retryable ? 'reuse' : 'replace',
+    });
   }
   return res.status(500).json({ error: 'Billing request failed' });
 };

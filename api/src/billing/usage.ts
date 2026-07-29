@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { requireRazorpayPlan } from './config';
 import { isUsageMetric } from './metrics';
 export { USAGE_METRICS } from './metrics';
 
@@ -42,8 +43,8 @@ function reservationSnapshot(value: Prisma.JsonValue | null | undefined): {
 }
 
 /**
- * The local append-only ledger is the billing source of truth. Exporting an
- * event to Stripe (or another billing provider) is a separate, retryable step.
+ * The local append-only ledger is the usage and rating source of truth.
+ * Provider collection is a separate concern and must not change this event.
  */
 export async function recordUsageEvent(input: RecordUsageInput) {
   if (!isUsageMetric(input.metric)) {
@@ -90,7 +91,11 @@ export async function recordUsageEvent(input: RecordUsageInput) {
       where: { id: input.organizationId },
       select: {
         planTier: true,
-        billingAccount: { select: { currency: true } },
+        billingAccounts: {
+          where: { activeKey: 'current' },
+          take: 1,
+          select: { currency: true },
+        },
       },
       }),
       input.correctionOfId
@@ -121,8 +126,10 @@ export async function recordUsageEvent(input: RecordUsageInput) {
       throw new Error('Usage communication attribution is invalid');
     }
     const snapshot = reservationSnapshot(attempt?.request);
+    const billingCurrency = organization.billingAccounts[0]?.currency ??
+      requireRazorpayPlan(organization.planTier).currency;
     const planKey = correctionOf?.priceVersion?.planKey ?? snapshot.planKey ?? organization.planTier;
-    const currency = correctionOf?.currency ?? snapshot.currency ?? organization.billingAccount?.currency;
+    const currency = correctionOf?.currency ?? snapshot.currency ?? billingCurrency;
     const priceVersion = correctionOf
       ? correctionOf.priceVersion
       : await tx.priceVersion.findFirst({
@@ -143,8 +150,8 @@ export async function recordUsageEvent(input: RecordUsageInput) {
       const exact = quantity
         .mul(priceVersion.unitAmountMinor.toString())
         .div(priceVersion.unitQuantity);
-      // Preserve fractional minor units so period totals follow Stripe's sum
-      // aggregation rather than rounding every provider event independently.
+      // Preserve fractional minor units so local period totals are not distorted
+      // by independently rounding every usage event.
       ratedAmountSubminor = exact;
       ratedAmountMinor = BigInt(exact.toFixed(0));
     }

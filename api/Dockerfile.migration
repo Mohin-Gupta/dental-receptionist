@@ -12,8 +12,9 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Prisma CLI is a development dependency by design. It exists only in this
-# one-shot image and remains absent from the long-lived API/worker image.
+# Prisma CLI is a development dependency by design. This one-shot image
+# intentionally retains it; the long-lived Dockerfile removes the optional
+# peer copy after generating and smoke-loading @prisma/client.
 ENV NODE_ENV=development
 
 COPY --chown=node:node package.json package-lock.json ./

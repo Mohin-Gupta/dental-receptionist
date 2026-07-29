@@ -156,8 +156,8 @@ export async function evaluateTenantBudgetAlerts(pageSize = 500): Promise<number
           await prisma.subscriptionMirror.findFirst({
             where: {
               organizationId: budget.organizationId,
-              billingProvider: 'stripe',
               activeKey: 'current',
+              billingAccount: { activeKey: 'current' },
             },
             select: { currentPeriodStart: true, currentPeriodEnd: true },
           })

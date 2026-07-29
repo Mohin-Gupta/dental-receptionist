@@ -265,12 +265,15 @@ export interface BillingSubscription {
   id: string;
   planKey: string;
   status: string;
+  providerStatus: string | null;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   trialEnd: string | null;
   cancelAtPeriodEnd: boolean;
   canceledAt: string | null;
   graceUntil: string | null;
+  canCancel: boolean;
+  cancellationMode: 'immediate' | 'period_end' | null;
 }
 
 export interface BillingUsageGroup {
@@ -329,11 +332,38 @@ export interface BillingSummary {
     expiresAt: string | null;
   }>;
   budgets: TenantBudget[];
+  actions: {
+    canStartCheckout: boolean;
+  };
 }
 
-export interface HostedBillingSession {
-  id: string;
-  url: string;
+export interface RazorpayCheckoutSession {
+  provider: 'razorpay';
+  checkoutIntentId: string;
+  keyId: string;
+  subscriptionId: string;
+  merchantName: string;
+  description: string;
+  prefill?: {
+    name?: string;
+    email?: string;
+    contact?: string;
+  };
+  themeColor?: string;
+}
+
+export interface RazorpayCheckoutProof {
+  checkoutIntentId: string;
+  razorpayPaymentId: string;
+  razorpaySubscriptionId: string;
+  razorpaySignature: string;
+}
+
+export interface RazorpayCancellationResult {
+  subscriptionId: string;
+  cancelAtPeriodEnd: boolean;
+  cancellationMode: 'immediate' | 'period_end';
+  currentPeriodEnd: string | null;
 }
 
 // ── Tenant provider integrations ────────────────────────────────────────────

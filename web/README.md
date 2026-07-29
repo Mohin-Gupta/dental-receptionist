@@ -1,36 +1,52 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dental Receptionist web
 
-## Getting Started
+Next.js 16 dashboard for clinic administration, billing, usage, and provider
+integrations.
 
-First, run the development server:
+## Local development
+
+Copy `.env.example` to `.env.local`, point `NEXT_PUBLIC_API_URL` at the API,
+then run:
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`NEXT_PUBLIC_BILLING_PLAN_KEYS` is a comma-separated list of the plan keys
+configured by the API, for example `starter,growth`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Razorpay subscriptions
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The billing page loads the official Razorpay Checkout script only on the
+billing route. The API creates the subscription and returns the public Razorpay
+key ID plus the checkout intent. The browser sends Razorpay's signed completion
+fields back to `/billing/checkout/verify`; the API verifies those fields,
+retrieves canonical Razorpay state, and projects access server-side. Signed
+webhooks reconcile every subsequent provider change.
 
-## Learn More
+Do not add `RAZORPAY_KEY_SECRET` or webhook secrets to the web service. The API
+and worker need the Razorpay API key secret for canonical provider reads; only
+the API needs the webhook signing secret. The public key ID is supplied by the
+API checkout response, so the web image does not require a Razorpay environment
+variable.
 
-To learn more about Next.js, take a look at the following resources:
+## Railway build
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Use `/web` as the service root. The Docker image requires these build-time
+variables:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```dotenv
+NEXT_PUBLIC_API_URL=https://your-api.example.com/api
+NEXT_PUBLIC_BILLING_PLAN_KEYS=starter
+```
 
-## Deploy on Vercel
+Values prefixed with `NEXT_PUBLIC_` are embedded into the browser bundle during
+`next build`; changing them requires rebuilding the web service.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Validate a release with:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+```

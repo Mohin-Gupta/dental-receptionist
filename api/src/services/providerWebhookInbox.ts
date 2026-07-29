@@ -79,14 +79,24 @@ export async function markWebhookProcessing(
     providerAccountId?: string | null;
     providerResourceId?: string | null;
     communicationAttemptId?: string | null;
-  }
+  },
+  allowQuarantined = true
 ) {
   const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+  const now = new Date();
   const claimed = await prisma.providerWebhookEvent.updateMany({
     where: {
       id: eventId,
       OR: [
-        { status: { in: ['received', 'failed', 'quarantined'] } },
+        { status: 'received' },
+        {
+          status: 'failed',
+          OR: [
+            { nextAttemptAt: null },
+            { nextAttemptAt: { lte: now } },
+          ],
+        },
+        ...(allowQuarantined ? [{ status: 'quarantined' }] : []),
         { status: 'processing', processingStartedAt: { lt: staleBefore } },
       ],
     },
@@ -94,6 +104,7 @@ export async function markWebhookProcessing(
       ...(attribution ?? {}),
       status: 'processing',
       processingStartedAt: new Date(),
+      nextAttemptAt: null,
       processingAttempts: { increment: 1 },
       lastError: null,
     },
@@ -103,14 +114,22 @@ export async function markWebhookProcessing(
 
 export async function markWebhookProcessed(
   event: { id: string; provider: string; idempotencyKey: string },
-  response: unknown
+  response: unknown,
+  attribution?: {
+    organizationId?: string | null;
+    providerAccountId?: string | null;
+    providerResourceId?: string | null;
+    communicationAttemptId?: string | null;
+  }
 ) {
   return prisma.providerWebhookEvent.update({
     where: { id: event.id },
     data: {
+      ...(attribution ?? {}),
       response: protect(response, purpose(event.provider, event.idempotencyKey, 'response')),
       status: 'processed',
       processingStartedAt: null,
+      nextAttemptAt: null,
       processedAt: new Date(),
       lastError: null,
     },
@@ -120,7 +139,8 @@ export async function markWebhookProcessed(
 export async function markWebhookFailed(
   eventId: string,
   error: unknown,
-  status: 'failed' | 'quarantined' = 'failed'
+  status: 'failed' | 'quarantined' = 'failed',
+  nextAttemptAt: Date | null = null
 ) {
   const message = error instanceof Error ? error.message : 'Unknown webhook processing error';
   return prisma.providerWebhookEvent.update({
@@ -128,6 +148,7 @@ export async function markWebhookFailed(
     data: {
       status,
       processingStartedAt: null,
+      nextAttemptAt: status === 'failed' ? nextAttemptAt : null,
       lastError: message.slice(0, 1000),
     },
   });
@@ -140,4 +161,12 @@ export function readWebhookResponse(event: {
 }): unknown | null {
   if (event.response === null) return null;
   return unprotect(event.response, purpose(event.provider, event.idempotencyKey, 'response'));
+}
+
+export function readWebhookPayload(event: {
+  provider: string;
+  idempotencyKey: string;
+  payload: Prisma.JsonValue;
+}): unknown {
+  return unprotect(event.payload, purpose(event.provider, event.idempotencyKey, 'payload'));
 }

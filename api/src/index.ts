@@ -72,7 +72,7 @@ app.use(['/api/webhook', '/api/webhooks'], providerWebhookRateLimit);
 
 // Provider signatures must be checked against the exact bytes received. The
 // parsed body remains available to normal handlers while rawBody is retained
-// for Stripe and Vapi signature verification.
+// for Razorpay and Vapi signature verification.
 app.use(express.json({
   limit: Number(process.env.JSON_BODY_LIMIT_BYTES ?? 1_048_576),
   verify: (req, _res, buffer) => {
@@ -156,7 +156,9 @@ async function shutdown(signal: string) {
   const forceTimer = setTimeout(() => {
     console.error('API graceful shutdown timed out');
     process.exit(1);
-  }, 10_000);
+  // Leave the platform five seconds to deliver a hard stop after our own
+  // graceful-shutdown budget expires.
+  }, 25_000);
   forceTimer.unref();
 
   await new Promise<void>((resolve) => server.close(() => resolve()));

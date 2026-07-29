@@ -1,8 +1,8 @@
 import { decryptSecret, encryptSecret } from '../auth/secretBox';
 import {
-  getStripePlans,
-  getStripeRuntimeConfig,
-  getStripeWebhookSecrets,
+  getRazorpayPlans,
+  getRazorpayRuntimeConfig,
+  getRazorpayWebhookSecrets,
 } from '../billing/config';
 import { getDataRetentionConfig } from './dataRetention';
 import { getConfiguredPriceVersions } from '../billing/priceCatalog';
@@ -14,9 +14,10 @@ function requireValues(names: string[]) {
   if (missing.length > 0) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
 }
 
-function requireHttpsUrl(name: string) {
+function requireHttpsUrl(name: string): { raw: string; url: URL } {
   const raw = process.env[name];
   if (!raw) throw new Error(`${name} is required`);
+  if (raw !== raw.trim()) throw new Error(`${name} must not contain surrounding whitespace`);
   let url: URL;
   try {
     url = new URL(raw);
@@ -24,6 +25,46 @@ function requireHttpsUrl(name: string) {
     throw new Error(`${name} must be an absolute URL`);
   }
   if (url.protocol !== 'https:') throw new Error(`${name} must use HTTPS in production`);
+  if (url.username || url.password) throw new Error(`${name} must not contain credentials`);
+  return { raw, url };
+}
+
+function requireHttpsOrigin(name: string, rawValue?: string) {
+  const raw = rawValue ?? process.env[name];
+  if (!raw) throw new Error(`${name} is required`);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be an absolute URL`);
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash ||
+    raw !== url.origin
+  ) {
+    throw new Error(
+      `${name} must be an exact HTTPS origin without credentials, path, query, or fragment`
+    );
+  }
+}
+
+function requireExactHttpsCallback(name: string, pathname: string) {
+  const { raw, url } = requireHttpsUrl(name);
+  if (
+    url.pathname !== pathname ||
+    url.search ||
+    url.hash ||
+    raw !== url.toString()
+  ) {
+    throw new Error(
+      `${name} must be exactly an HTTPS URL ending in ${pathname} without a query or fragment`
+    );
+  }
 }
 
 function requireSecretLength(name: string, minimumBytes = 32) {
@@ -70,6 +111,7 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
   requireValues([
     'WEB_ORIGIN',
     'PUBLIC_API_URL',
+    'VAPI_WEBHOOK_URL',
     'DATA_ENCRYPTION_KEYS',
     'DATA_ENCRYPTION_ACTIVE_KEY_ID',
     'OAUTH_STATE_SECRET',
@@ -82,15 +124,22 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
     'SMTP_USER',
     'SMTP_PASS',
     'SMTP_FROM',
-    'STRIPE_API_VERSION',
+    'RAZORPAY_KEY_ID',
+    'RAZORPAY_KEY_SECRET',
+    'RAZORPAY_EXPECT_KEY_MODE',
+    'RAZORPAY_PLAN_CONFIG_JSON',
   ]);
-  for (const origin of process.env.WEB_ORIGIN!.split(',').map(value => value.trim()).filter(Boolean)) {
-    const parsed = new URL(origin);
-    if (parsed.protocol !== 'https:') throw new Error('Every WEB_ORIGIN must use HTTPS in production');
+  const webOrigins = process.env.WEB_ORIGIN!
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (webOrigins.length === 0) {
+    throw new Error('WEB_ORIGIN must contain at least one HTTPS origin');
   }
-  requireHttpsUrl('PUBLIC_API_URL');
-  requireHttpsUrl('GOOGLE_REDIRECT_URI');
-  if (process.env.VAPI_WEBHOOK_URL?.trim()) requireHttpsUrl('VAPI_WEBHOOK_URL');
+  for (const origin of webOrigins) requireHttpsOrigin('Every WEB_ORIGIN', origin);
+  requireHttpsOrigin('PUBLIC_API_URL');
+  requireExactHttpsCallback('GOOGLE_REDIRECT_URI', '/api/auth/google/callback');
+  requireExactHttpsCallback('VAPI_WEBHOOK_URL', '/api/webhook/vapi');
   requireSecretLength('OAUTH_STATE_SECRET');
   requireSecretLength('CALLER_VERIFICATION_HMAC_SECRET');
   requireSecretLength('VAPI_HMAC_SECRET');
@@ -104,11 +153,13 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
     throw new Error('The data encryption keyring failed its startup check');
   }
 
-  // A production SaaS process without a valid catalog or webhook secret must
-  // fail at deploy time, not after the first customer tries to pay.
-  getStripeRuntimeConfig();
-  getStripePlans();
-  getStripeWebhookSecrets();
+  // A production SaaS process without a valid catalog must fail at deploy
+  // time, not after the first customer tries to pay. Only the API receives and
+  // verifies Razorpay webhook signatures; the worker consumes verified,
+  // encrypted inbox rows and must not receive the endpoint signing secret.
+  getRazorpayRuntimeConfig();
+  getRazorpayPlans();
+  if (processRole === 'api') getRazorpayWebhookSecrets();
   getConfiguredPriceVersions();
   getCommunicationPreferenceHmacKeyring();
   getDataRetentionConfig();

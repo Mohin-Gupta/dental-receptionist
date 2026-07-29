@@ -1,5 +1,6 @@
 import { Prisma, type CommunicationAttempt } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { requireRazorpayPlan } from './config';
 
 export const COMMERCIAL_FEATURES = {
   APPOINTMENTS: 'appointments.write',
@@ -8,6 +9,21 @@ export const COMMERCIAL_FEATURES = {
 } as const;
 
 export type CommercialFeature = (typeof COMMERCIAL_FEATURES)[keyof typeof COMMERCIAL_FEATURES];
+
+export const BILLING_MANAGED_ENTITLEMENT_SOURCES = [
+  'billing-plan',
+  'razorpay-plan',
+  'stripe-plan',
+] as const;
+
+export function isBillingManagedEntitlementSource(
+  source: string | null | undefined
+): boolean {
+  return Boolean(
+    source &&
+    (BILLING_MANAGED_ENTITLEMENT_SOURCES as readonly string[]).includes(source)
+  );
+}
 
 export class CommercialAccessError extends Error {
   constructor(
@@ -32,7 +48,11 @@ interface AccessSnapshot {
     id: string;
     status: string;
     planTier: string;
-    billingAccount: { currency: string } | null;
+    billingAccounts: Array<{
+      id: string;
+      billingProvider: string;
+      currency: string;
+    }>;
   };
   subscription: {
     id: string;
@@ -67,7 +87,12 @@ function subscriptionIsCurrent(
   subscription: AccessSnapshot['subscription'],
   now: Date
 ): boolean {
-  if (!subscription || !['active', 'trialing'].includes(subscription.status)) return false;
+  if (
+    !subscription ||
+    !['active', 'trialing', 'completed'].includes(subscription.status)
+  ) {
+    return false;
+  }
   if (subscription.status === 'trialing' && subscription.trialEnd) {
     return subscription.trialEnd > now;
   }
@@ -85,7 +110,15 @@ async function assertFeatureAccessTx(
       id: true,
       status: true,
       planTier: true,
-      billingAccount: { select: { currency: true } },
+      billingAccounts: {
+        where: { activeKey: 'current' },
+        take: 1,
+        select: {
+          id: true,
+          billingProvider: true,
+          currency: true,
+        },
+      },
     },
   });
   if (!organization || !['active', 'past_due_grace'].includes(organization.status)) {
@@ -131,37 +164,45 @@ async function assertFeatureAccessTx(
     );
   }
 
-  // A Stripe entitlement must be evaluated against the exact subscription that
-  // materialized it. Selecting merely the most recently updated subscription
-  // lets an unrelated/old subscription shadow or accidentally authorize it.
-  const linkedStripeSubscriptionId = currentEntitlement?.source === 'stripe-plan'
-    ? currentEntitlement.subscriptionMirrorId
+  // A provider-managed entitlement must be evaluated against the exact
+  // subscription and current provider account that materialized it. Selecting
+  // merely the most recently updated subscription would let an unrelated or
+  // historical provider subscription accidentally authorize access.
+  const billingAccount = organization.billingAccounts[0] ?? null;
+  const billingManagedEntitlement = isBillingManagedEntitlementSource(
+    currentEntitlement?.source
+  );
+  const linkedBillingSubscriptionId = billingManagedEntitlement
+    ? currentEntitlement?.subscriptionMirrorId ?? null
     : null;
-  const subscription = await tx.subscriptionMirror.findFirst({
-    where: {
-      organizationId: input.organizationId,
-      billingProvider: 'stripe',
-      ...(linkedStripeSubscriptionId
-        ? { id: linkedStripeSubscriptionId }
-        : organization.status === 'past_due_grace'
-          ? { status: 'past_due' }
-          : { status: { in: ['active', 'trialing'] } }),
-    },
-    orderBy: { updatedAt: 'desc' },
-    select: {
-      id: true,
-      planKey: true,
-      status: true,
-      currentPeriodStart: true,
-      currentPeriodEnd: true,
-      trialEnd: true,
-      graceUntil: true,
-    },
-  });
-  const stripeGrantMatches = Boolean(
-    currentEntitlement?.source === 'stripe-plan' &&
-    linkedStripeSubscriptionId &&
-    linkedStripeSubscriptionId === subscription?.id &&
+  const subscription = billingAccount
+    ? await tx.subscriptionMirror.findFirst({
+        where: {
+          organizationId: input.organizationId,
+          billingAccountId: billingAccount.id,
+          billingProvider: billingAccount.billingProvider,
+          ...(linkedBillingSubscriptionId
+            ? { id: linkedBillingSubscriptionId }
+            : organization.status === 'past_due_grace'
+              ? { status: 'past_due' }
+              : { status: { in: ['active', 'trialing'] } }),
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          planKey: true,
+          status: true,
+          currentPeriodStart: true,
+          currentPeriodEnd: true,
+          trialEnd: true,
+          graceUntil: true,
+        },
+      })
+    : null;
+  const billingGrantMatches = Boolean(
+    billingManagedEntitlement &&
+    linkedBillingSubscriptionId &&
+    linkedBillingSubscriptionId === subscription?.id &&
     subscription.planKey === organization.planTier
   );
 
@@ -171,7 +212,7 @@ async function assertFeatureAccessTx(
       subscription.status !== 'past_due' ||
       !subscription.graceUntil ||
       subscription.graceUntil <= now ||
-      (currentEntitlement?.source === 'stripe-plan' && !stripeGrantMatches)
+      (billingManagedEntitlement && !billingGrantMatches)
     ) {
       throw new CommercialAccessError(
         'The billing grace period has expired',
@@ -180,10 +221,13 @@ async function assertFeatureAccessTx(
       );
     }
   } else {
-    const manualGrant = currentEntitlement && currentEntitlement.source !== 'stripe-plan';
+    const manualGrant = Boolean(
+      currentEntitlement &&
+      !isBillingManagedEntitlementSource(currentEntitlement.source)
+    );
     if (
       !manualGrant &&
-      !(stripeGrantMatches && subscriptionIsCurrent(subscription, now)) &&
+      !(billingGrantMatches && subscriptionIsCurrent(subscription, now)) &&
       !devBypass
     ) {
       throw new CommercialAccessError(
@@ -452,9 +496,8 @@ async function enforceBudgetsTx(
         where: { ...usageWhere, currency: budget.currency },
         _sum: { ratedAmountSubminor: true },
       });
-      // Usage events are rated and rounded independently. Price each pending
-      // attempt independently as well; pricing their aggregate once can
-      // under-reserve when several fractional per-event amounts round upward.
+      // Price each pending attempt independently so a conservative reservation
+      // cannot be reduced by aggregating several fractional event amounts.
       const activePrice = await loadActivePrice(
         tx,
         access.organization.planTier,
@@ -468,9 +511,8 @@ async function enforceBudgetsTx(
       }
       const projectedAmount = (actualAmount._sum.ratedAmountSubminor ?? new Prisma.Decimal(0))
         .plus(pendingAmount);
-      // Round the aggregate upward for a conservative dispatch decision. This
-      // mirrors sum-meter pricing and cannot under-reserve by rounding each
-      // provider event separately.
+      // Round the aggregate upward for a conservative dispatch decision while
+      // retaining exact subminor amounts in the local usage ledger.
       if (projectedAmount.ceil().greaterThan(amountLimit.toString())) {
         throw new CommercialAccessError(
           'The tenant monetary usage budget has been reached',
@@ -552,7 +594,8 @@ export async function reserveCommunicationAttempt(input: {
         quantity: effectiveQuantity.toFixed(),
         unit: input.unit,
         planKey: access.organization.planTier,
-        currency: access.organization.billingAccount?.currency ?? null,
+        currency: access.organization.billingAccounts[0]?.currency ??
+          requireRazorpayPlan(access.organization.planTier).currency,
         reservedAt: now.toISOString(),
       },
     };
