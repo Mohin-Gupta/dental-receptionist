@@ -82,8 +82,6 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
     'SMTP_USER',
     'SMTP_PASS',
     'SMTP_FROM',
-    'TERMS_VERSION',
-    'PRIVACY_VERSION',
     'STRIPE_API_VERSION',
   ]);
   for (const origin of process.env.WEB_ORIGIN!.split(',').map(value => value.trim()).filter(Boolean)) {

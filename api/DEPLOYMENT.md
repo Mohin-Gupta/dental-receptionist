@@ -48,8 +48,6 @@ docker build \
   --build-arg NODE_IMAGE='node:24.16.0-bookworm-slim@sha256:<same-approved-digest>' \
   --build-arg NEXT_PUBLIC_API_URL='https://api.example.com/api' \
   --build-arg NEXT_PUBLIC_BILLING_PLAN_KEYS='starter' \
-  --build-arg NEXT_PUBLIC_TERMS_URL='https://example.com/terms' \
-  --build-arg NEXT_PUBLIC_PRIVACY_URL='https://example.com/privacy' \
   -t registry.example.com/dental-web:<git-sha> \
   web
 ```

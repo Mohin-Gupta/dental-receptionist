@@ -113,7 +113,6 @@ const organizationRegistrationSchema = z.object({
   countryCode: z.string().trim().regex(/^[A-Z]{2}$/).default('IN'),
   defaultCallingCode: z.string().trim().regex(/^\d{1,4}$/).default('91'),
   locale: z.string().trim().regex(/^[a-z]{2,3}(?:-[A-Z]{2})?$/).default('en-IN'),
-  acceptTerms: z.literal(true),
 }).strict();
 
 class RegistrationRequestError extends Error {
@@ -457,8 +456,6 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
           targetType: 'Organization',
           targetId: organization.id,
           metadata: {
-            termsVersion: process.env.TERMS_VERSION ?? '2026-07-13',
-            privacyVersion: process.env.PRIVACY_VERSION ?? '2026-07-13',
             registrationRequestId: request.id,
           },
           ...getRequestMeta(req),
