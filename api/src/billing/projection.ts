@@ -468,7 +468,7 @@ async function projectSubscription(
   validateCustomerId(subscription.customer_id);
 
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${account.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${account.organizationId}`}, 0))::text`;
 
     const existing = await tx.subscriptionMirror.findUnique({
       where: {

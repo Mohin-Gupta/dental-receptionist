@@ -359,7 +359,7 @@ export async function syncConfiguredPriceVersions(
   validateLocalRateCompatibility(configured, plans, now);
 
   return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('billing-price-catalog', 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('billing-price-catalog', 0))::text`;
     await validateOperationalTenantCoverage(tx, configured, plans, now);
 
     const existing = configured.length === 0

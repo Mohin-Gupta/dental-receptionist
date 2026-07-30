@@ -79,7 +79,7 @@ export async function recordCommunicationPreference(input: {
   );
   const effectiveAt = input.effectiveAt ?? new Date();
   return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`communication-preference:${input.organizationId}:${input.channel}:${hashes.active}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`communication-preference:${input.organizationId}:${input.channel}:${hashes.active}`}, 0))::text`;
     const existing = await tx.communicationPreference.findMany({
       where: {
         organizationId: input.organizationId,

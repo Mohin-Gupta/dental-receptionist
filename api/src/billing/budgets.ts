@@ -134,8 +134,8 @@ export async function saveTenantBudget(organizationId: string, input: TenantBudg
   return prisma.$transaction(async (tx) => {
     // Serialize a limit change with spend reservations for the same tenant and
     // metric, so lowering a budget cannot race one last provider dispatch.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${organizationId}:${input.metric}`}, 0))`;
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${organizationId}:${input.metric}`}, 0))::text`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text`;
     const organization = await tx.organization.findUnique({
       where: { id: organizationId },
       select: {

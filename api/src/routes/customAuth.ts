@@ -351,7 +351,7 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
   try {
     const passwordHash = await hashPassword(input.password);
     const registration = await prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration:${idempotencyKeyHash}`}, 0))`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration:${idempotencyKeyHash}`}, 0))::text`;
       const existingRequest = await tx.organizationRegistrationRequest.findUnique({
         where: { idempotencyKeyHash },
       });
@@ -486,7 +486,7 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
     let deliveryPending = registration.verificationDeliveryStatus !== 'sent';
     if (deliveryPending) {
       const deliveryClaim = await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration-email:${idempotencyKeyHash}`}, 0))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration-email:${idempotencyKeyHash}`}, 0))::text`;
         const request = await tx.organizationRegistrationRequest.findUniqueOrThrow({
           where: { id: registration.requestId },
         });
@@ -836,7 +836,7 @@ router.post('/auth/invites/accept', authRateLimit, async (req: Request, res: Res
   let user: User;
   try {
     user = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${invite.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${invite.organizationId}`}, 0))::text`;
     const durableInvite = await tx.inviteToken.findUnique({
       where: { id: invite.id },
       select: { id: true, clinicId: true, acceptedAt: true, expiresAt: true },

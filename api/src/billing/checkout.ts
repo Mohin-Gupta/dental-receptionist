@@ -209,7 +209,7 @@ export async function ensureRazorpayBillingAccount(
   currency: string
 ) {
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-account:${organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-account:${organizationId}`}, 0))::text`;
 
     const organization = await tx.organization.findUnique({
       where: { id: organizationId },
@@ -699,7 +699,7 @@ export async function createRazorpayCheckoutSession(input: {
   }
 
   const claimed = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${input.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${input.organizationId}`}, 0))::text`;
 
     const existingSubscription = await tx.subscriptionMirror.findFirst({
       where: {
@@ -1160,7 +1160,7 @@ async function applyConfirmedCancellation(
 ) {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${attempt.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${attempt.organizationId}`}, 0))::text`;
 
     const current = await tx.subscriptionMirror.findUnique({
       where: { id: attempt.subscriptionMirrorId },
@@ -1347,7 +1347,7 @@ async function claimCancellationAttempt(
   }
 ) {
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${organizationId}`}, 0))::text`;
 
     const current = await tx.subscriptionMirror.findUnique({
       where: { id: mirrorId },
@@ -1451,7 +1451,7 @@ async function recordCancellationAttemptState(
 ): Promise<boolean> {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${attempt.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${attempt.organizationId}`}, 0))::text`;
 
     const [current, currentAttempt] = await Promise.all([
       tx.subscriptionMirror.findUnique({

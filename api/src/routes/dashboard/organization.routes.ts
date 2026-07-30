@@ -166,7 +166,7 @@ router.patch('/dashboard/organization/members/:userId',
 
     try {
       await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text`;
         const target = await tx.user.findFirst({
           where: {
             id: userId.data,
@@ -376,8 +376,8 @@ router.patch('/dashboard/organization/clinics/:clinicId/status',
 
     try {
       const result = await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${organizationId}`}, 0))`;
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-access:${organizationId}`}, 0))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${organizationId}`}, 0))::text`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-access:${organizationId}`}, 0))::text`;
         const clinic = await tx.clinic.findFirst({
           where: { id: clinicId.data, organizationId },
           select: { id: true, name: true, status: true },
@@ -536,7 +536,7 @@ router.post('/dashboard/organization/clinics',
 
     try {
       const clinic = await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text`;
         const organization = await tx.organization.findUnique({
           where: { id: organizationId },
           select: {

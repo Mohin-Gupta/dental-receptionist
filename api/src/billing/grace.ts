@@ -31,7 +31,7 @@ function checkoutIntentIdFromPayload(value: unknown): string {
 
 export async function expireOrganizationBillingGrace(organizationId: string, now = new Date()) {
   return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`billing-subscription:${organizationId}`}, 0))::text`;
     const controller = await tx.subscriptionMirror.findFirst({
       where: {
         organizationId,

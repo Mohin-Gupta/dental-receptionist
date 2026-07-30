@@ -247,7 +247,7 @@ export async function assertCommercialFeatureAccess(input: {
   feature: CommercialFeature;
 }): Promise<void> {
   await prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-access:${input.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-access:${input.organizationId}`}, 0))::text`;
     await assertFeatureAccessTx(tx, input, new Date());
   });
 }
@@ -556,7 +556,7 @@ export async function reserveCommunicationAttempt(input: {
   }
 
   return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${input.organizationId}:${input.metric}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${input.organizationId}:${input.metric}`}, 0))::text`;
     const now = new Date();
     const access = await assertFeatureAccessTx(tx, input, now);
     const existing = await tx.communicationAttempt.findUnique({

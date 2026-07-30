@@ -63,7 +63,7 @@ export async function recordUsageEvent(input: RecordUsageInput) {
     // Budget reservations use this same lock. Keeping the reservation-to-actual
     // transition behind it prevents an interleaving where a budget reader sees
     // neither the old reservation nor the newly inserted ledger event.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${input.organizationId}:${input.metric}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`commercial-spend:${input.organizationId}:${input.metric}`}, 0))::text`;
 
     const existing = await tx.usageEvent.findUnique({
       where: {
