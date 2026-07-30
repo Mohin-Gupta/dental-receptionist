@@ -513,9 +513,24 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
           data: { verificationDeliveryStatus: 'sent' },
         });
         deliveryPending = false;
-      } catch {
+      } catch (error) {
+        const diagnostic = error && typeof error === 'object'
+          ? {
+              name: error instanceof Error ? error.name : undefined,
+              code: 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+              responseCode:
+                'responseCode' in error && typeof error.responseCode === 'number'
+                  ? error.responseCode
+                  : undefined,
+              command:
+                'command' in error && typeof error.command === 'string'
+                  ? error.command
+                  : undefined,
+            }
+          : { name: typeof error };
         console.error('Registration verification email could not be sent', {
           userId: registration.userId,
+          diagnostic,
         });
         await prisma.organizationRegistrationRequest.updateMany({
           where: { id: registration.requestId, verificationDeliveryStatus: 'sending' },
