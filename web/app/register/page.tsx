@@ -120,12 +120,16 @@ export default function RegisterOrganizationPage() {
     setError('');
     setNotice('');
     try {
-      await api.post(
+      const response = await api.post<{ success: boolean; verificationDeliveryPending?: boolean }>(
         '/auth/resend-verification',
         { email: form.email },
         { headers: { 'Idempotency-Key': createIdempotencyKey('verification-resend') } }
       );
-      setNotice('A new verification email has been sent.');
+      setNotice(
+        response.data.verificationDeliveryPending
+          ? 'We could not deliver the email right now. Please try again shortly.'
+          : 'A new verification email has been sent.'
+      );
     } catch (requestError) {
       setError(errorMessage(requestError, 'Unable to resend the verification email'));
     } finally {

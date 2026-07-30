@@ -115,6 +115,23 @@ const organizationRegistrationSchema = z.object({
   locale: z.string().trim().regex(/^[a-z]{2,3}(?:-[A-Z]{2})?$/).default('en-IN'),
 }).strict();
 
+function emailDeliveryDiagnostic(error: unknown): Record<string, unknown> {
+  return error && typeof error === 'object'
+    ? {
+        name: error instanceof Error ? error.name : undefined,
+        code: 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+        responseCode:
+          'responseCode' in error && typeof error.responseCode === 'number'
+            ? error.responseCode
+            : undefined,
+        command:
+          'command' in error && typeof error.command === 'string'
+            ? error.command
+            : undefined,
+      }
+    : { name: typeof error };
+}
+
 class RegistrationRequestError extends Error {
   constructor(
     readonly code: 'idempotency_conflict' | 'registration_in_progress' | 'email_exists',
@@ -514,23 +531,9 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
         });
         deliveryPending = false;
       } catch (error) {
-        const diagnostic = error && typeof error === 'object'
-          ? {
-              name: error instanceof Error ? error.name : undefined,
-              code: 'code' in error && typeof error.code === 'string' ? error.code : undefined,
-              responseCode:
-                'responseCode' in error && typeof error.responseCode === 'number'
-                  ? error.responseCode
-                  : undefined,
-              command:
-                'command' in error && typeof error.command === 'string'
-                  ? error.command
-                  : undefined,
-            }
-          : { name: typeof error };
         console.error('Registration verification email could not be sent', {
           userId: registration.userId,
-          diagnostic,
+          diagnostic: emailDeliveryDiagnostic(error),
         });
         await prisma.organizationRegistrationRequest.updateMany({
           where: { id: registration.requestId, verificationDeliveryStatus: 'sending' },
@@ -994,11 +997,20 @@ router.post('/auth/resend-verification', authRateLimit, async (req: Request, res
     where: { email: parsed.data.email },
     select: { id: true, email: true, emailVerifiedAt: true, status: true },
   });
+  let deliveryPending: boolean | undefined;
   if (user && user.status === 'active' && !user.emailVerifiedAt) {
-    await createEmailVerificationToken(user.id, user.email);
-    await securityEvent(req, 'email_verification_resent', { userId: user.id });
+    try {
+      await createEmailVerificationToken(user.id, user.email);
+      await securityEvent(req, 'email_verification_resent', { userId: user.id });
+    } catch (error) {
+      console.error('Verification email resend could not be sent', {
+        userId: user.id,
+        diagnostic: emailDeliveryDiagnostic(error),
+      });
+      deliveryPending = true;
+    }
   }
-  return res.json({ success: true });
+  return res.status(deliveryPending ? 202 : 200).json({ success: true, verificationDeliveryPending: deliveryPending });
 });
 
 router.post('/auth/reset-password', authRateLimit, async (req: Request, res: Response) => {
