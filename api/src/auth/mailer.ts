@@ -29,8 +29,53 @@ function getTransport() {
   });
 }
 
+function getResendApiKey(): string | undefined {
+  if (process.env.RESEND_API_KEY) return process.env.RESEND_API_KEY;
+
+  // Backward-compatible migration path for deployments that already use a
+  // Resend API key as their SMTP password.
+  if (process.env.SMTP_HOST === 'smtp.resend.com') return process.env.SMTP_PASS;
+
+  return undefined;
+}
+
+async function sendWithResendApi(
+  apiKey: string,
+  from: string,
+  to: string,
+  subject: string,
+  text: string
+): Promise<void> {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from, to, subject, text }),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    const error = new Error('Resend API rejected the email delivery request') as Error & {
+      code: string;
+      responseCode: number;
+    };
+    error.code = `RESEND_API_${response.status}`;
+    error.responseCode = response.status;
+    throw error;
+  }
+}
+
 async function sendMail(to: string, subject: string, text: string): Promise<void> {
   const from = process.env.SMTP_FROM ?? 'Dental Receptionist <no-reply@example.com>';
+  const resendApiKey = getResendApiKey();
+
+  if (resendApiKey) {
+    await sendWithResendApi(resendApiKey, from, to, subject, text);
+    return;
+  }
+
   const transport = getTransport();
 
   if (!transport) {
