@@ -29,7 +29,7 @@ interface AuthContextValue {
   organizations: AuthOrganization[];
   clinics: AuthClinic[];
   loading: boolean;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean>;
   setScope: (organizationId: string, clinicId: string) => Promise<void>;
   logout: () => Promise<void>;
   canWriteAppointments: boolean;
@@ -52,8 +52,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     setLoading(true);
+    let redirectedToMfa = false;
     try {
       const response = await api.get<AuthMeResponse>('/auth/me');
       setMe(response.data);
@@ -71,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         window.location.pathname !== '/mfa'
       ) {
         router.replace('/mfa');
+        redirectedToMfa = true;
       }
     } catch {
       setMe(null);
@@ -79,6 +81,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
+    return redirectedToMfa;
   }, [router]);
 
   useEffect(() => {

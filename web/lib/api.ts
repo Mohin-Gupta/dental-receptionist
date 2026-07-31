@@ -45,7 +45,30 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const status = error?.response?.status;
+    const serverErrorCode = error?.response?.data?.error;
+    const isCsrfFailure =
+      status === 403 &&
+      (serverErrorCode === 'Invalid CSRF token' || serverErrorCode === 'CSRF token required');
+
+    // The CSRF token fully rotates on every /auth/csrf call (e.g. from a
+    // background refresh() in another tab, or on remount after a reload),
+    // which can invalidate a token still held by an open form. Rather than
+    // surface that as a confusing "Invalid CSRF token" error, transparently
+    // fetch a fresh token and retry the request once.
+    if (isCsrfFailure && !error.config?._csrfRetried) {
+      try {
+        const freshToken = await refreshCsrfToken();
+        if (freshToken) {
+          const retryConfig = { ...error.config, _csrfRetried: true };
+          return api.request(retryConfig);
+        }
+      } catch {
+        // fall through to normal 401/rejection handling below
+      }
+    }
+
     if (
       typeof window !== 'undefined' &&
       error?.response?.status === 401 &&

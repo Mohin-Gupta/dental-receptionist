@@ -52,8 +52,10 @@ export default function SignInPage() {
       }
 
       setCsrfToken(response.data.csrfToken);
-      await refresh();
-      router.replace(response.data?.recoveryCodeUsed === true ? '/mfa' : '/dashboard');
+      const redirectedToMfa = await refresh();
+      if (!redirectedToMfa) {
+        router.replace(response.data?.recoveryCodeUsed === true ? '/mfa' : '/dashboard');
+      }
     } catch (err: unknown) {
       const message = axios.isAxiosError(err)
         ? err.response?.data?.error

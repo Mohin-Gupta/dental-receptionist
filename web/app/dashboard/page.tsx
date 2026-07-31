@@ -1,6 +1,8 @@
 'use client';
 import StatCard, { type StatCardProps,} from './components/StatCard';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import axios from 'axios';
 import api, { DashboardStats, Appointment, formatTime, nowInTimezone } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
@@ -12,6 +14,7 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface StatusConfigItem {
@@ -38,14 +41,30 @@ export default function DashboardPage() {
   const [stats, setStats]   = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setError('');
+    setMfaRequired(false);
 
     api.get<DashboardStats>('/dashboard/stats')
       .then(r => setStats(r.data))
-      .catch(() => setError('Failed to load dashboard stats'))
+      .catch((err) => {
+        if (axios.isAxiosError(err) && (err.response?.data?.mfaRequired || err.response?.data?.mfaSetupRequired)) {
+          setMfaRequired(true);
+          setError(
+            err.response?.data?.mfaSetupRequired
+              ? "Stats can't load until multi-factor authentication is set up for your account."
+              : "Stats can't load until this session completes multi-factor authentication."
+          );
+          return;
+        }
+        const serverMessage = axios.isAxiosError(err) && typeof err.response?.data?.error === 'string'
+          ? err.response.data.error
+          : null;
+        setError(serverMessage ?? 'Failed to load dashboard stats. Please try again.');
+      })
       .finally(() => setLoading(false));
   }, [activeOrganizationId, activeClinicId]);
 
@@ -85,9 +104,21 @@ useEffect(() => {
   if (error) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
+        <div className="text-center max-w-sm px-4">
+          {mfaRequired ? (
+            <ShieldAlert className="w-8 h-8 text-amber-400 mx-auto mb-2" />
+          ) : (
+            <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
+          )}
           <p className="text-gray-400 text-sm">{error}</p>
+          {mfaRequired && (
+            <Link
+              href="/mfa"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Go to MFA setup
+            </Link>
+          )}
         </div>
       </div>
     );
