@@ -252,7 +252,11 @@ async function processToolCalls(message: any, tenant: Awaited<ReturnType<typeof 
       } catch (error) {
         const invalidInput = error instanceof z.ZodError || error instanceof SyntaxError;
         if (!invalidInput) {
-          console.error('Vapi tool execution failed', { tool: name, callId: tenant.callId });
+          console.error('Vapi tool execution failed', {
+            tool: name,
+            callId: tenant.callId,
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
         result = invalidInput
           ? 'The request details were incomplete or invalid. Ask the patient to repeat the required details.'
