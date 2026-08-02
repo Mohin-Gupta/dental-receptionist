@@ -25,9 +25,6 @@ const countryOptions = [
 
 const inputClass =
   'w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500';
-const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL?.trim();
-const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL?.trim();
-const legalDocumentsConfigured = Boolean(termsUrl && privacyUrl);
 
 function errorMessage(error: unknown, fallback: string): string {
   return axios.isAxiosError(error)
@@ -48,7 +45,6 @@ export default function RegisterOrganizationPage() {
     countryCode: 'IN',
     defaultCallingCode: '91',
     locale: 'en-IN',
-    acceptTerms: false,
   });
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
@@ -62,7 +58,7 @@ export default function RegisterOrganizationPage() {
     if (detected) setForm(current => ({ ...current, timezone: detected }));
   }, []);
 
-  const update = (key: keyof typeof form, value: string | boolean) => {
+  const update = (key: keyof typeof form, value: string) => {
     setForm(current => ({ ...current, [key]: value }));
   };
 
@@ -84,15 +80,6 @@ export default function RegisterOrganizationPage() {
       setError('Passwords do not match');
       return;
     }
-    if (!form.acceptTerms) {
-      setError('You must accept the terms and privacy policy');
-      return;
-    }
-    if (!legalDocumentsConfigured) {
-      setError('Self-service registration is temporarily unavailable because the legal document links are not configured.');
-      return;
-    }
-
     const payload = {
       ownerName: form.ownerName,
       email: form.email,
@@ -104,7 +91,6 @@ export default function RegisterOrganizationPage() {
       countryCode: form.countryCode,
       defaultCallingCode: form.defaultCallingCode,
       locale: form.locale,
-      acceptTerms: true as const,
     };
     const fingerprint = JSON.stringify(payload);
     if (!registrationRequest.current || registrationRequest.current.fingerprint !== fingerprint) {
@@ -134,12 +120,16 @@ export default function RegisterOrganizationPage() {
     setError('');
     setNotice('');
     try {
-      await api.post(
+      const response = await api.post<{ success: boolean; verificationDeliveryPending?: boolean }>(
         '/auth/resend-verification',
         { email: form.email },
         { headers: { 'Idempotency-Key': createIdempotencyKey('verification-resend') } }
       );
-      setNotice('A new verification email has been sent.');
+      setNotice(
+        response.data.verificationDeliveryPending
+          ? 'We could not deliver the email right now. Please try again shortly.'
+          : 'A new verification email has been sent.'
+      );
     } catch (requestError) {
       setError(errorMessage(requestError, 'Unable to resend the verification email'));
     } finally {
@@ -323,36 +313,6 @@ export default function RegisterOrganizationPage() {
           </label>
         </div>
 
-        <label className="mt-6 flex items-start gap-3 text-sm text-gray-400">
-          <input
-            type="checkbox"
-            checked={form.acceptTerms}
-            onChange={event => update('acceptTerms', event.target.checked)}
-            className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-800 text-blue-600"
-            required
-          />
-          <span>
-            I agree to the{' '}
-            {termsUrl ? (
-              <a href={termsUrl} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300">
-                Terms of Service
-              </a>
-            ) : 'Terms of Service'}{' '}
-            and{' '}
-            {privacyUrl ? (
-              <a href={privacyUrl} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300">
-                Privacy Policy
-              </a>
-            ) : 'Privacy Policy'}.
-          </span>
-        </label>
-
-        {!legalDocumentsConfigured && (
-          <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-300">
-            Registration requires the Terms and Privacy URLs to be configured by the service operator.
-          </div>
-        )}
-
         {error && (
           <div className="mt-5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2.5 text-sm text-red-400">
             {error}
@@ -361,7 +321,7 @@ export default function RegisterOrganizationPage() {
 
         <button
           type="submit"
-          disabled={submitting || !legalDocumentsConfigured}
+          disabled={submitting}
           className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {submitting && <Loader2 className="h-4 w-4 animate-spin" />}

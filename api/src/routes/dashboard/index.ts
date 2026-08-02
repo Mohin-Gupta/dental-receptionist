@@ -7,6 +7,7 @@ import callsRoutes from './calls.routes';
 import settingsRoutes from './settings.routes';
 import remindersRoutes from './reminders.routes';
 import doctorsRoutes from './doctors.routes';
+import doctorAvailabilityRoutes from './doctorAvailability.routes';
 import integrationsRoutes from './integrations.routes';
 import organizationRoutes from './organization.routes';
 import { requireAuth, requireClinic, requireCsrf } from '../../auth/middleware';
@@ -32,6 +33,7 @@ router.use(callsRoutes);
 router.use(settingsRoutes);
 router.use(remindersRoutes);
 router.use(doctorsRoutes);
+router.use(doctorAvailabilityRoutes);
 router.use(integrationsRoutes);
 router.use(organizationRoutes);
 

@@ -1,9 +1,12 @@
 import 'dotenv/config';
 import { cleanupExpiredAuthenticationState } from './auth/tokenCleanup';
 import {
-  exportPendingStripeUsage,
   expireElapsedBillingGrace,
+  processPendingRazorpayWebhooks,
   processTenantBudgetAlerts,
+  reconcileEndedRazorpayCancellations,
+  reconcilePendingRazorpayCancellations,
+  reconcileStaleRazorpayCheckoutSessions,
   syncConfiguredPriceVersions,
 } from './billing';
 import { validateRuntimeConfiguration } from './config/runtime';
@@ -23,6 +26,7 @@ import {
   recordWorkerTaskStarted,
   recordWorkerTaskSucceeded,
 } from './ops/workerTaskStatus';
+import { CURRENT_WORKER_TASKS } from './ops/operationsHealth';
 
 validateRuntimeConfiguration('worker');
 
@@ -83,42 +87,49 @@ async function main() {
 
   const stopTasks = [
     startNonOverlappingTask(
-      'Billing grace expiry',
-      5 * 60 * 1000,
+      CURRENT_WORKER_TASKS.billingGraceExpiry.name,
+      CURRENT_WORKER_TASKS.billingGraceExpiry.intervalMs,
       () => expireElapsedBillingGrace(250)
     ),
     startNonOverlappingTask(
-      'Authentication token cleanup',
-      15 * 60 * 1000,
+      CURRENT_WORKER_TASKS.razorpayCancellationReconciliation.name,
+      CURRENT_WORKER_TASKS.razorpayCancellationReconciliation.intervalMs,
+      async () => {
+        await reconcilePendingRazorpayCancellations(100);
+        return reconcileEndedRazorpayCancellations(100);
+      }
+    ),
+    startNonOverlappingTask(
+      CURRENT_WORKER_TASKS.razorpayCheckoutReconciliation.name,
+      CURRENT_WORKER_TASKS.razorpayCheckoutReconciliation.intervalMs,
+      () => reconcileStaleRazorpayCheckoutSessions(100)
+    ),
+    startNonOverlappingTask(
+      CURRENT_WORKER_TASKS.authenticationTokenCleanup.name,
+      CURRENT_WORKER_TASKS.authenticationTokenCleanup.intervalMs,
       cleanupExpiredAuthenticationState
     ),
     startNonOverlappingTask(
-      'Sensitive payload retention',
-      60 * 60 * 1000,
+      CURRENT_WORKER_TASKS.sensitivePayloadRetention.name,
+      CURRENT_WORKER_TASKS.sensitivePayloadRetention.intervalMs,
       () => runSensitiveDataRetention(500)
     ),
     startNonOverlappingTask(
-      'Provider usage reconciliation',
-      5 * 60 * 1000,
+      CURRENT_WORKER_TASKS.providerUsageReconciliation.name,
+      CURRENT_WORKER_TASKS.providerUsageReconciliation.intervalMs,
       () => reconcileStaleProviderAttempts()
     ),
     startNonOverlappingTask(
-      'Tenant budget alerts',
-      5 * 60 * 1000,
+      CURRENT_WORKER_TASKS.tenantBudgetAlerts.name,
+      CURRENT_WORKER_TASKS.tenantBudgetAlerts.intervalMs,
       processTenantBudgetAlerts
     ),
+    startNonOverlappingTask(
+      CURRENT_WORKER_TASKS.razorpayWebhookProcessing.name,
+      CURRENT_WORKER_TASKS.razorpayWebhookProcessing.intervalMs,
+      () => processPendingRazorpayWebhooks(100)
+    ),
   ];
-
-  const billingMaintenanceEnabled =
-    process.env.BILLING_MAINTENANCE_ENABLED !== 'false' &&
-    Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PLAN_CONFIG_JSON);
-  if (billingMaintenanceEnabled) {
-    stopTasks.push(startNonOverlappingTask(
-      'Stripe usage export',
-      30 * 1000,
-      () => exportPendingStripeUsage(250)
-    ));
-  }
 
   // Publish freshness only after every worker component initialized. This
   // prevents API readiness from passing while startup is still incomplete.

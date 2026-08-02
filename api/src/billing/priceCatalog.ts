@@ -1,8 +1,12 @@
 import { Prisma, type PriceVersion } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { getStripePlans, type StripePlanMap } from './config';
-import { USAGE_METRIC_VALUES } from './metrics';
+import { getRazorpayPlans, type RazorpayPlan, type RazorpayPlanMap } from './config';
+import {
+  USAGE_METRICS,
+  USAGE_METRIC_VALUES,
+  VOICE_USAGE_METRIC_VALUES,
+} from './metrics';
 
 const planKeySchema = z.string().regex(/^[a-z][a-z0-9_-]{0,49}$/);
 const metricSchema = z.enum(USAGE_METRIC_VALUES);
@@ -165,32 +169,53 @@ function validateEffectiveWindows(entries: ConfiguredPriceVersion[]) {
   }
 }
 
-function validateStripeCompatibility(
+function localUsageMetricsForPlan(plan: RazorpayPlan): readonly string[] {
+  const metrics: string[] = [];
+  if (plan.entitlements['communications.sms'] !== false &&
+      plan.entitlements['communications.sms'] !== undefined) {
+    metrics.push(USAGE_METRICS.SMS_SEGMENTS);
+  }
+  if (plan.entitlements['communications.voice'] !== false &&
+      plan.entitlements['communications.voice'] !== undefined) {
+    metrics.push(...VOICE_USAGE_METRIC_VALUES);
+  }
+  return metrics;
+}
+
+function validateLocalRateCompatibility(
   entries: ConfiguredPriceVersion[],
-  plans: StripePlanMap,
+  plans: RazorpayPlanMap,
   now: Date
 ) {
   for (const entry of entries) {
     const plan = plans[entry.planKey];
     if (!plan) {
       throw new PriceCatalogConfigurationError(
-        `Price version references unknown Stripe plan ${entry.planKey}`
+        `Price version references unknown billing plan ${entry.planKey}`
       );
     }
-    if (!plan.meteredPriceIds[entry.metric] || !plan.meterEventNames[entry.metric]) {
+    if (entry.currency !== plan.currency) {
       throw new PriceCatalogConfigurationError(
-        `Price version ${priceCompositeKey(entry)} is not a configured Stripe metered metric`
+        `Price version ${priceCompositeKey(entry)} does not match the plan currency ${plan.currency}`
+      );
+    }
+    if (!localUsageMetricsForPlan(plan).includes(entry.metric)) {
+      throw new PriceCatalogConfigurationError(
+        `Price version ${priceCompositeKey(entry)} is not enabled by the plan entitlements`
       );
     }
   }
 
   for (const [planKey, plan] of Object.entries(plans)) {
-    for (const metric of Object.keys(plan.meteredPriceIds)) {
+    for (const metric of localUsageMetricsForPlan(plan)) {
       if (!entries.some(entry => (
-        entry.planKey === planKey && entry.metric === metric && appliesAt(entry, now)
+        entry.planKey === planKey &&
+        entry.metric === metric &&
+        entry.currency === plan.currency &&
+        appliesAt(entry, now)
       ))) {
         throw new PriceCatalogConfigurationError(
-          `No currently effective local price is configured for ${planKey}:${metric}`
+          `No currently effective local rate is configured for ${planKey}:${metric}`
         );
       }
     }
@@ -271,7 +296,7 @@ function validateExistingCatalog(
 async function validateOperationalTenantCoverage(
   tx: Prisma.TransactionClient,
   entries: ConfiguredPriceVersion[],
-  plans: StripePlanMap,
+  plans: RazorpayPlanMap,
   now: Date
 ) {
   const organizations = await tx.organization.findMany({
@@ -279,28 +304,33 @@ async function validateOperationalTenantCoverage(
     select: {
       id: true,
       planTier: true,
-      billingAccount: { select: { currency: true } },
+      billingAccounts: {
+        where: { activeKey: 'current' },
+        take: 1,
+        select: { currency: true },
+      },
     },
   });
 
   for (const organization of organizations) {
-    if (!organization.billingAccount) continue;
+    const billingAccount = organization.billingAccounts[0] ?? null;
+    if (!billingAccount) continue;
     const plan = plans[organization.planTier];
     if (!plan) {
       throw new PriceCatalogConfigurationError(
         `Operational organization ${organization.id} uses unavailable plan ${organization.planTier}`
       );
     }
-    for (const metric of Object.keys(plan.meteredPriceIds)) {
+    for (const metric of localUsageMetricsForPlan(plan)) {
       const covered = entries.some(entry => (
         entry.planKey === organization.planTier &&
         entry.metric === metric &&
-        entry.currency === organization.billingAccount!.currency &&
+        entry.currency === billingAccount.currency &&
         appliesAt(entry, now)
       ));
       if (!covered) {
         throw new PriceCatalogConfigurationError(
-          `No current ${organization.billingAccount.currency} price covers ` +
+          `No current ${billingAccount.currency} price covers ` +
           `${organization.planTier}:${metric} for operational organization ${organization.id}`
         );
       }
@@ -323,13 +353,13 @@ export interface PriceCatalogSyncResult {
 export async function syncConfiguredPriceVersions(
   now = new Date()
 ): Promise<PriceCatalogSyncResult> {
-  const plans = getStripePlans();
+  const plans = getRazorpayPlans();
   const configured = getConfiguredPriceVersions();
   validateEffectiveWindows(configured);
-  validateStripeCompatibility(configured, plans, now);
+  validateLocalRateCompatibility(configured, plans, now);
 
   return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('billing-price-catalog', 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('billing-price-catalog', 0))::text`;
     await validateOperationalTenantCoverage(tx, configured, plans, now);
 
     const existing = configured.length === 0

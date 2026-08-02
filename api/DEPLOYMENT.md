@@ -3,7 +3,7 @@
 This service is deployed as four routine workloads/jobs from the API source tree:
 
 - **API:** the default `runtime` image command, `node dist/index.js`. It may be horizontally scaled.
-- **Worker:** the same `runtime` image with command `node dist/worker.js`. It runs reminders, the transactional outbox, token cleanup, billing-grace expiry, Stripe usage export, and bounded sensitive-payload retention.
+- **Worker:** the same `runtime` image with command `node dist/worker.js`. It runs reminders, the transactional outbox, token cleanup, billing-grace expiry, durable Razorpay webhook projection, budget alerts, provider-usage reconciliation, and bounded sensitive-payload retention.
 - **Migration job:** the Docker `migration` target, run once per release before the new API and worker version.
 - **Price-catalog sync job:** the runtime image with command `npm run billing:sync-prices`, run after migrations and before the worker/API.
 
@@ -18,14 +18,14 @@ Use managed PostgreSQL with point-in-time recovery and managed Redis with TLS, a
 
 ## 1. Production prerequisites
 
-1. Create separate production and staging projects/accounts for PostgreSQL, Redis, Stripe, Vapi, Twilio, Google OAuth, and SMTP. Do not share signing secrets or provider resources between environments.
+1. Create separate production and staging projects/accounts for PostgreSQL, Redis, Razorpay, Vapi, Twilio, Google OAuth, and SMTP. Use Razorpay Test Mode in staging and Live Mode only in production. Do not share signing secrets or provider resources between environments.
 2. Put every value from [`.env.example`](./.env.example) in a managed secret/config store. Restrict production secrets to the API, worker, and migration identities that need them. Do not commit or bake `.env` files into images.
-3. Use TLS for the public application, PostgreSQL, Redis, SMTP, and provider traffic. `WEB_ORIGIN`, `PUBLIC_API_URL`, billing return URLs, and the Google callback must be HTTPS in production.
+3. Use TLS for the public application, PostgreSQL, Redis, SMTP, and provider traffic. Each `WEB_ORIGIN` entry and `PUBLIC_API_URL` must be a canonical HTTPS origin with no credentials, path, query, fragment, or trailing slash. `GOOGLE_REDIRECT_URI` and `VAPI_WEBHOOK_URL` must be the exact public callback routes shown in [`.env.example`](./.env.example).
 4. Generate independent high-entropy values for the data-encryption key, OAuth-state secret, Vapi HMAC secret, operations bearer token, database password, and Redis password. Do not reuse provider secrets. Generate the operations token with `openssl rand -base64 48` and give it only to the API and monitoring/operator system; the worker does not need it.
 5. Configure the production domain and proxy to preserve the original scheme, host, path, request body, and provider signature headers. Strip authorization, cookies, request bodies, OAuth query strings, patient data, and webhook payloads from proxy/APM logs.
 6. Complete the applicable DPA/BAA, privacy notice, terms, data-residency review, breach process, and subprocessors list before handling patient data. `VAPI_STORE_TRANSCRIPTS`, `GOOGLE_CALENDAR_STORE_PHI`, and `GOOGLE_WORKSPACE_BAA_CONFIRMED` default to `false` deliberately.
 
-`validateRuntimeConfiguration()` runs before either long-lived process starts. In production it rejects missing database/Redis, public origins, encryption, OAuth-state, Vapi-HMAC, Google OAuth, SMTP, legal-document versions, pinned Stripe configuration, webhook signing secrets, heartbeat policy, and explicit sensitive-payload retention periods; the API additionally requires the operations bearer token. It also validates the exact trusted-proxy hop count, webhook request ceiling, JSON/urlencoded byte limits, and an explicitly configured Vapi webhook URL before Express accepts traffic. Keep those byte limits aligned with the ingress proxy and set `TRUST_PROXY_HOPS` to the actual topology; an excessive value can make client-IP controls trust spoofed forwarding headers.
+`validateRuntimeConfiguration()` runs before either long-lived process starts. In production it rejects missing database/Redis, canonical public URLs, encryption, OAuth-state, Vapi-HMAC, Google OAuth, SMTP, pinned Razorpay plan/API configuration, the local price catalog, heartbeat policy, and all five explicit sensitive-payload retention periods. The API additionally requires the operations bearer token and Razorpay webhook signing secret; the worker deliberately does not receive that endpoint secret. It also validates the exact trusted-proxy hop count, webhook request ceiling, and JSON/urlencoded byte limits before either process accepts work. Keep those byte limits aligned with the ingress proxy and set `TRUST_PROXY_HOPS` to the actual topology; an excessive value can make client-IP controls trust spoofed forwarding headers.
 
 ## 2. Build immutable images
 
@@ -48,17 +48,44 @@ docker build \
   --build-arg NODE_IMAGE='node:24.16.0-bookworm-slim@sha256:<same-approved-digest>' \
   --build-arg NEXT_PUBLIC_API_URL='https://api.example.com/api' \
   --build-arg NEXT_PUBLIC_BILLING_PLAN_KEYS='starter' \
-  --build-arg NEXT_PUBLIC_TERMS_URL='https://example.com/terms' \
-  --build-arg NEXT_PUBLIC_PRIVACY_URL='https://example.com/privacy' \
   -t registry.example.com/dental-web:<git-sha> \
   web
 ```
 
-The runtime image contains production dependencies only and runs as the unprivileged `node` user. Scan the image and dependency lockfile in CI, sign the image, deploy by digest, and retain the previous known-good image. The Dockerfile intentionally has no image-level `HEALTHCHECK`, because the same runtime image also runs a worker with no HTTP listener; configure per-workload probes instead.
+The runtime image prunes declared development dependencies, explicitly removes the Prisma CLI optional peer after generating and smoke-loading `@prisma/client`, and runs as the unprivileged `node` user. The migration images intentionally retain the CLI. Scan the image and dependency lockfile in CI, sign the image, deploy by digest, and retain the previous known-good image. The Dockerfile intentionally has no image-level `HEALTHCHECK`, because the same runtime image also runs a worker with no HTTP listener; configure per-workload probes instead.
+
+### Railway service settings
+
+This monorepo deliberately has no repository-wide Railway configuration file:
+one file cannot safely express the different roots, commands, probes, and
+one-shot lifecycle of every service. Configure each Railway service explicitly:
+
+- **API:** root directory `/api`, `Dockerfile`, default start command, public
+  domain attached, and Railway healthcheck path `/health/ready`. Monitor
+  `/health/live` separately for process liveness.
+- **Worker:** root directory `/api`, `Dockerfile`, start command
+  `node dist/worker.js`, no public domain, and no HTTP healthcheck. Supervise the
+  process and database heartbeat instead.
+- **Migration job:** root directory `/api`,
+  `RAILWAY_DOCKERFILE_PATH=Dockerfile.migration`, no public domain or
+  healthcheck, and run once before a compatible release. Do not configure it as
+  an always-on service.
+- **Price-catalog sync job:** root directory `/api`, `Dockerfile`, start command
+  `npm run billing:sync-prices`, no public domain or healthcheck, and run once
+  after migrations.
+- **Web:** root directory `/web`, `Dockerfile`, public domain attached, with
+  `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_BILLING_PLAN_KEYS` provided as build
+  variables.
+
+Set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` on the API and worker; Railway's
+default drain window is zero. Keep at least five seconds between the API's
+25-second internal graceful-shutdown deadline and the platform hard stop. Use
+the workload-specific health settings above rather than adding an image-level
+healthcheck.
 
 ## 3. Release and migration sequence
 
-For every release:
+For an ordinary schema-compatible release:
 
 1. Build, test, scan, and deploy the exact candidate to staging.
 2. Take a fresh PostgreSQL backup and record the current migration/image versions. Restore that backup into an isolated staging database and run the migration there first.
@@ -71,12 +98,54 @@ For every release:
    ```
 
 4. Require a zero exit code from `prisma migrate deploy`. The multi-tenant foundation migration includes integrity preflight checks and may stop on ambiguous legacy data; fix the data deliberately and rerun it. Never use `prisma migrate dev`, `db push`, or an automatic destructive rollback in production.
-5. With `DATABASE_URL`, `STRIPE_PLAN_CONFIG_JSON`, and `BILLING_PRICE_VERSIONS_JSON` injected, run `npm run billing:sync-prices` as a one-shot job from the same release image. It creates only missing immutable local rate versions and fails on drift, gaps, missing current metered metrics, or missing operational-tenant currency coverage. There is intentionally no tenant-facing API for changing retail rates.
-6. Deploy the worker with `node dist/worker.js`, wait for its database heartbeat, then deploy the API. Use a termination grace period of at least 30 seconds and wait for old instances to drain. The API and worker must use the same `WORKER_HEARTBEAT_NAME` and freshness settings.
+5. With `DATABASE_URL`, `RAZORPAY_PLAN_CONFIG_JSON`, and `BILLING_PRICE_VERSIONS_JSON` injected, run `npm run billing:sync-prices` as a one-shot job from the same release image. It creates only missing immutable local rate versions and fails on drift, gaps, missing current usage metrics, or missing operational-tenant currency coverage. There is intentionally no tenant-facing API for changing retail rates.
+6. Deploy the worker with `node dist/worker.js`, wait for its database heartbeat, then deploy the API. Use a termination grace period of at least 30 seconds (`RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` on Railway) and wait for old instances to drain. The API exits unsuccessfully if its own 25-second graceful-shutdown deadline expires; the platform window must remain longer. The API and worker must use the same `WORKER_HEARTBEAT_NAME` and freshness settings.
 7. On the first encryption-aware release, run the legacy-secret dry-run/apply/verification sequence in section 6 only after every old API and worker replica has drained.
-8. Verify readiness, authentication, tenant switching, provider integration health, one test appointment, one test reminder in a non-patient test tenant, Stripe Checkout/Portal, and all webhook deliveries.
+8. Verify readiness, authentication, tenant switching, provider integration health, one test appointment, one test reminder in a non-patient test tenant, Razorpay subscription authorization and cancellation, and every configured webhook delivery.
 
 Schema changes should remain backward-compatible across a rolling release. If a release fails after a migration, roll application containers forward or back only when the old version is schema-compatible. Database restore is the last-resort rollback and must follow the restore procedure below.
+
+### Stripe-to-Razorpay provider cutover
+
+The release containing `20260729100000_razorpay_billing_provider` is a
+forward-only billing cutover, not an ordinary mixed-version rollout. Schedule a
+billing maintenance window and keep tenant billing plus every operation that
+can start billable voice or SMS work closed until the sequence below completes.
+Do not run its migration while any old API or worker can still write billing
+state.
+
+1. Gate `/api/billing/*` and new billable communications while the old Stripe
+   API and worker are still running. Drain in-flight calls and messages so their
+   usage is finalized. Disable new Stripe Checkout creation and explicitly
+   expire or wait out every open Stripe Checkout Session.
+2. Record a cutover timestamp. Using the old release, export every local usage
+   event through that timestamp, resolve all pending, failed, processing, or
+   quarantined Stripe `UsageExport` rows, and reconcile Stripe meter events,
+   invoices, payments, credits, and refunds. Do not proceed while unfinalized
+   communication usage or an unresolved Stripe export remains.
+3. Cancel or otherwise settle every live Stripe subscription. Keep the old
+   Stripe webhook endpoint available until final provider deliveries have been
+   processed, every Stripe inbox failure/quarantine has been resolved, and the
+   canonical provider state agrees with the terminal local mirror.
+4. Stop the old worker and every old API replica, wait for requests and task
+   leases to drain, and prevent the old workloads from restarting. Only then run
+   `prisma migrate deploy`. The cutover migration fails before its first schema
+   change if a live/current Stripe subscription, active/unresolved Stripe
+   Checkout, unresolved Stripe usage export, or unresolved Stripe webhook
+   remains. Investigate and settle the reported old-provider state; never bypass
+   the preflight or rewrite migration history.
+5. After a successful migration, synchronize the Razorpay/local price catalog
+   and deploy the new worker and API as a single-version pool. Configure and
+   verify the Razorpay webhook, complete a canary Razorpay authorization, verify
+   the server-side canonical projection, and confirm signed webhook processing
+   before reopening tenant operations.
+
+Never run old and new billing binaries concurrently during this cutover, and do
+not roll the application back to the Stripe image after the migration or after
+any Razorpay provider action. On failure, keep billing maintenance active and
+repair or roll forward. A database restore alone cannot reverse external
+subscription cancellations, meter events, or Razorpay mandates; any full
+restore requires a separately reviewed provider reconciliation.
 
 ### MFA hardening release cutover
 
@@ -97,20 +166,77 @@ specific release as an ordinary mixed-version rolling deployment.
 
 - `GET /health` and `GET /health/live` are process liveness checks and do not call dependencies.
 - `GET /health/ready` checks PostgreSQL and Redis. When `REQUIRE_WORKER_HEARTBEAT_FOR_READINESS=true`, it also requires the row named by `WORKER_HEARTBEAT_NAME` to be newer than `WORKER_HEARTBEAT_MAX_AGE_SECONDS`; otherwise it returns `503`. Use it for readiness, not liveness. Production requires an explicit true/false choice so a missing value cannot silently change the gate.
-- The worker writes its first heartbeat before starting queues and refreshes it every `WORKER_HEARTBEAT_INTERVAL_SECONDS`. Set the maximum age to at least twice that interval. The worker still has no HTTP listener, so also supervise its process and alert on restarts.
-- `GET /api/ops/status` requires `Authorization: Bearer <OPERATIONS_BEARER_TOKEN>`. It returns only global operational timestamps and counts: worker/process and per-recurring-task freshness, dead-letter outbox and budget-alert rows, active budget-evaluation configuration issues, unfinalized terminal usage, usage approaching Stripe's export window, quarantined provider webhooks/usage exports, and processing leases stale for five minutes. It never returns tenant identifiers or payloads. A `200` response with `status: attention_required` is reachable but unhealthy work, while `503` means status could not be read.
+- The worker writes its first heartbeat only after every queue and recurring component has initialized, then refreshes it every `WORKER_HEARTBEAT_INTERVAL_SECONDS`. Set the maximum age to at least twice that interval. The worker still has no HTTP listener, so also supervise its process and alert on restarts.
+- `GET /api/ops/status` requires `Authorization: Bearer <OPERATIONS_BEARER_TOKEN>`. It returns only global operational timestamps and counts: worker/process and current recurring-task freshness, missing current tasks, dead-letter outbox and budget-alert rows, active budget-evaluation configuration issues, unfinalized terminal usage, the raw Razorpay webhook backlog and its overdue portion after a two-minute grace window, quarantined webhooks, five-minute-stale processing leases, and five-minute-stale Razorpay checkout intents. Retired task rows such as the legacy Stripe usage exporter are excluded from current worker health. It never returns tenant identifiers or payloads. A `200` response with `status: attention_required` is reachable but unhealthy work, while `503` means status could not be read.
 - Start with one worker replica. Scale only after confirming the recurring maintenance tasks and provider rate limits behave correctly at the intended concurrency. API replicas are stateless apart from PostgreSQL/Redis and can scale independently.
-- Alert on database/Redis saturation, connection exhaustion, HTTP 5xx/latency, webhook non-2xx responses, billing-account suspension, Stripe meter export lag, SMTP failures, and provider spend anomalies per organization.
+- Alert on database/Redis saturation, connection exhaustion, HTTP 5xx/latency, webhook non-2xx responses, stale or quarantined provider webhooks, billing-account suspension, Razorpay payment/subscription failures, SMTP failures, and provider spend anomalies per organization.
 
 Do not expose health endpoints through an authenticated CDN cache. Allow readiness probes only from the deployment network where possible. Keep `/api/ops/status` private to the monitoring/operator network, redact its Authorization header at every proxy/APM layer, rotate its token through the secret manager, and alert on repeated `401` responses. The bearer token is defense in depth, not a substitute for network policy.
 
 ## 5. Provider and billing configuration
 
-### Stripe
+### Razorpay Subscriptions
 
-Create recurring base Prices and, for each billable metric, a Stripe Meter plus metered recurring Price. Put their immutable IDs and event names in `STRIPE_PLAN_CONFIG_JSON`; plan keys are public application identifiers, not Stripe lookup keys. Separately configure `BILLING_PRICE_VERSIONS_JSON` and materialize it with `npm run billing:sync-prices`; Stripe Price IDs do not populate local rates automatically. `unitAmountMinor` is a positive integer minor-unit string, `unitQuantity` is a positive decimal string, currency is an uppercase three-letter code, and each plan/metric/currency timeline must have an open-ended latest version. An explicit previous `effectiveTo` must equal its successor's `effectiveFrom`; an older null end is implicitly superseded. Every Stripe metered plan metric needs a currently effective local version, and every currency used by an operational tenant needs coverage. Quantity budgets work without local prices, but amount-based budgets and locally rated totals do not. Confirm currency, billing interval, tax behavior, trials, grace period, refunds, entitlement behavior, and local rate versions in staging.
+Create one immutable Razorpay **Plan** for each sellable fixed-price tier in the
+same mode as the API key. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`, then
+set `RAZORPAY_EXPECT_KEY_MODE=test` in staging and
+`RAZORPAY_EXPECT_KEY_MODE=live` in production. The key prefix must match the
+expected mode (`rzp_test_...` or `rzp_live_...`). `RAZORPAY_ACCOUNT_ID` is an
+optional defense-in-depth check against the `account_id` in webhook payloads.
+Set `RAZORPAY_CHECKOUT_NAME` to the merchant name displayed by Checkout.
+`RAZORPAY_API_TIMEOUT_MS`, `RAZORPAY_API_MAX_RETRIES`, and
+`RAZORPAY_SUBSCRIPTION_AUTH_TTL_MINUTES` use the bounded defaults documented in
+[`.env.example`](./.env.example). Never set `RAZORPAY_API_BASE_URL` in
+production; production startup permits only `https://api.razorpay.com`.
 
-Budget revisions are append-only and exact no-op saves return the current policy. Soft values are the warning basis for percentage alerts; hard values are the provider-dispatch ceiling (with the configured enforcement mode). Only `voice_seconds` and `sms_segments` can be conservatively reserved before provider dispatch and therefore support blocking. Vapi token and text-to-speech metrics are post-consumption and intentionally support alerts only; do not sell them as a hard cap. Billing-period budgets follow the current Stripe subscription mirror. Daily and calendar-month policies use UTC boundaries; the dashboard labels them explicitly. Monetary policies must match the organization's configured billing currency, and all limits must be positive.
+`RAZORPAY_PLAN_CONFIG_JSON` maps public application plan keys to canonical
+Razorpay Plans. It must contain between one and 50 entries, every `planId` must
+be unique, and the API checks that each referenced Razorpay Plan is active and
+has the configured amount, currency, period, and interval before creating a
+subscription. `amountMinor` is a positive integer in the currency's minor unit
+(paise for INR). `period` is `daily`, `weekly`, `monthly`, or `yearly`;
+`interval`, `quantity`, and `totalCount` are positive integers.
+`customerNotify` is a boolean. `name` and `description` are optional Checkout
+labels. `trialDays` may be 0–365 and becomes a future Razorpay
+subscription `start_at`; the customer must still authorize the subscription
+before trial access can be granted. For example:
+
+```json
+{"starter":{"currency":"INR","planId":"plan_00000000000001","amountMinor":499900,"period":"monthly","interval":1,"quantity":1,"totalCount":120,"customerNotify":true,"name":"Starter","description":"Dental Receptionist Starter subscription","entitlements":{"appointments.write":true,"communications.sms":true,"communications.voice":true,"clinics.max":1},"trialDays":0}}
+```
+
+Every sellable plan must explicitly grant the runtime feature keys it includes:
+`appointments.write`, `communications.voice`, and `communications.sms`. Set
+`clinics.max` to the numeric clinic limit. Entitlement values may be booleans,
+finite numbers, or short strings. `NEXT_PUBLIC_BILLING_PLAN_KEYS` must contain
+the same public plan keys exposed in `RAZORPAY_PLAN_CONFIG_JSON`.
+
+Razorpay receives the fixed recurring subscription only. The application does
+**not** export its usage ledger to Razorpay and the dashboard's usage estimate
+is not a provider invoice: it is an unfinalized, usage-only local estimate that
+excludes the plan's base fee, taxes, and discounts. Configure
+`BILLING_PRICE_VERSIONS_JSON` separately and materialize it with
+`npm run billing:sync-prices`; the Razorpay Plan amount does not create local
+usage rates. `unitAmountMinor` is a positive integer minor-unit string,
+`unitQuantity` is a positive decimal string, currency is an uppercase
+three-letter code, and each plan/metric/currency timeline must have an
+open-ended latest version. An explicit previous `effectiveTo` must equal its
+successor's `effectiveFrom`; an older null end is implicitly superseded. Every
+usage metric enabled by a plan needs a currently effective local version.
+Quantity budgets work without local prices, but amount-based budgets and
+locally rated totals do not.
+
+Budget revisions are append-only and exact no-op saves return the current
+policy. Soft values are the warning basis for percentage alerts; hard values
+are the provider-dispatch ceiling with the configured enforcement mode. Only
+`voice_seconds` and `sms_segments` can be conservatively reserved before
+provider dispatch and therefore support blocking. Vapi token and
+text-to-speech metrics are post-consumption and intentionally support alerts
+only; do not sell them as a hard cap. Billing-period budgets follow the current
+Razorpay subscription mirror. Daily and calendar-month policies use UTC
+boundaries; the dashboard labels them explicitly. Monetary policies must match
+the organization's configured billing currency, and all limits must be
+positive.
 
 The application currently emits and accepts catalog/budget configuration for
 exactly these usage metrics:
@@ -119,39 +245,78 @@ exactly these usage metrics:
 - `vapi_llm_prompt_tokens`, `vapi_llm_cached_prompt_tokens`, and `vapi_llm_completion_tokens`
 - `vapi_tts_characters`
 
-The example environment catalog includes all six so provider-derived usage does
-not become unrated or remain quarantined during Stripe export. Enabling
-`communications.voice` requires voice seconds plus all four Vapi model/speech
-metrics, and enabling `communications.sms` requires SMS segments. The exporter
-treats emitted-but-unconfigured usage as a non-retryable configuration error;
-do not use omission to model a base-fee allowance. Email delivery, recording
-storage, CPU time, and generic server load are not currently measured by
-durable usage emitters and must not be sold as usage-metered dimensions until
-their attribution and reconciliation paths exist. The sample local rate amounts
-demonstrate configuration syntax only; replace them with approved retail rates
-before catalog sync.
+Enabling `communications.voice` requires current local rates for voice seconds
+plus all four Vapi model/speech metrics, and enabling `communications.sms`
+requires a current SMS-segment rate. Email delivery, recording storage, CPU
+time, and generic server load are not currently measured by durable usage
+emitters and must not be sold as usage-rated dimensions until their attribution
+and reconciliation paths exist. The sample local rate amounts demonstrate
+configuration syntax only; replace them with approved retail rates before
+catalog sync.
 
-Every sellable plan must explicitly grant the runtime feature keys it includes:
-`appointments.write`, `communications.voice`, and `communications.sms`. Set
-`clinics.max` to the numeric clinic limit. `NEXT_PUBLIC_BILLING_PLAN_KEYS` must
-contain the same public plan keys exposed for Checkout.
+Register `POST https://api.example.com/api/webhooks/razorpay` in the Razorpay
+Dashboard and subscribe to exactly these implemented events:
 
-Register `POST https://api.example.com/api/webhooks/stripe` and subscribe to:
+- `subscription.authenticated`, `subscription.activated`, and `subscription.charged`
+- `subscription.updated`, `subscription.pending`, and `subscription.halted`
+- `subscription.paused` and `subscription.resumed`
+- `subscription.completed` and `subscription.cancelled`
 
-- `checkout.session.completed` and `checkout.session.async_payment_succeeded`
-- `checkout.session.expired` and `checkout.session.async_payment_failed`
-- `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, and `.resumed`
-- `invoice.paid`, `.payment_failed`, `.payment_action_required`, and `.finalization_failed`
+Store the endpoint signing secret in `RAZORPAY_WEBHOOK_SECRET`. During a
+signing-secret rotation, deploy the new and old values together using the
+comma-separated `RAZORPAY_WEBHOOK_SECRETS`, confirm deliveries signed with the
+new secret, and then remove the old value. The proxy must preserve the exact raw
+request body plus `x-razorpay-signature` and `x-razorpay-event-id`; body
+reserialization breaks verification. Inject these signing-secret variables into
+the API only. The worker needs the Razorpay API key for canonical reads but
+consumes already verified durable inbox rows and does not need the endpoint
+signing secret.
 
-Store the endpoint signing secret in `STRIPE_WEBHOOK_SECRET`. During signing-secret rotation, deploy the new and old values together using `STRIPE_WEBHOOK_SECRETS`, confirm new deliveries, then remove the old value. Keep `STRIPE_EXPECT_LIVEMODE=true` in production. Do not set `STRIPE_API_BASE_URL` in production.
+The webhook endpoint verifies the signature, event ID, envelope, and optional
+account ID, encrypts the durable event envelope, and acknowledges it
+immediately. Every five seconds the worker claims pending Razorpay events,
+retrieves the canonical subscription from Razorpay, and projects subscription,
+organization, and entitlement state. Checkout creation is single-flight per
+organization, the browser callback proof is checked against the server-created
+subscription. The API verifies the Checkout signature, re-reads canonical
+provider state, and projects that verified state synchronously so a delayed
+webhook does not strand an authorized customer. A dashboard click or unverified
+browser callback never grants access. Signed webhooks remain the durable source
+of subsequent provider changes and reconciliation. Start with one worker
+replica, configure Razorpay webhook retries, and alert on quarantined or stale
+inbox rows.
 
-Checkout creation is serialized per organization in PostgreSQL and a hosted URL is encrypted at rest. Set `STRIPE_CHECKOUT_TTL_MINUTES` between 35 and 1435. Also enable Stripe Checkout's customer-level **limit customers to one subscription** control as defense in depth against sessions created outside this application. A conflicting second provider subscription is quarantined locally; it must be investigated and refunded/canceled in Stripe rather than allowed to replace tenant entitlements.
+Cancellation is idempotent and provider state is re-read after ambiguous
+responses. Trials and subscriptions without a current paid billing cycle are
+cancelled immediately. Active paid subscriptions are cancelled at the end of
+the current cycle so access continues through the paid period. A subscription
+already in its final cycle has no later renewal to cancel and is rejected as a
+no-op. Verify immediate cancellation, period-end scheduling, the resulting
+webhooks, and final period end in staging. Reconcile the local subscription
+mirror and usage ledger against Razorpay subscriptions, payments, refunds, and
+provider cost reports before charging the first customer.
 
-The worker verifies/materializes the configured local price catalog before starting queues, exports pending usage every 30 seconds when `BILLING_MAINTENANCE_ENABLED` is not `false`, and reconciles stale Twilio/Vapi attempts every five minutes using provider reads only. Reconcile the local usage ledger, Stripe meter events, invoices, credits/refunds, and provider cost reports before charging the first customer. Configure Stripe retries and alert on the local webhook inbox/dead-letter state; webhook responses, not dashboard clicks, are the subscription source of truth.
+#### Legacy Stripe cutover
+
+The provider-cutover migration deliberately preserves existing Stripe billing
+accounts, subscription mirrors, Checkout rows, webhooks, exports, and audit
+history. Before changing the schema, it refuses any live/current Stripe
+subscription, active/unresolved Stripe Checkout, unresolved Stripe usage
+export, or unresolved Stripe webhook. A failure is an operator-visible stop,
+not a state to patch around.
+
+When every invariant passes, the migration releases the controller claim from
+safe historical Stripe billing accounts while retaining all provider IDs and
+history. A subsequent Razorpay Checkout can therefore create the new controller
+without an undocumented database edit. This is not an automatic subscription
+transfer: settle external Stripe state first, keep the cutover audit evidence,
+then initiate and verify Razorpay authorization before reopening tenant
+operations. Do not delete legacy rows, rewrite provider IDs, edit `activeKey`
+manually, or run the old Stripe binary after migration.
 
 ### Vapi
 
-Set `VAPI_WEBHOOK_URL=https://api.example.com/api/webhook/vapi` and configure Vapi to call that exact URL with `POST`. Platform provisioning can derive it from `PUBLIC_API_URL` when omitted, but an explicit value is easier to review and production startup rejects a configured non-HTTPS value. The verifier expects:
+Set `VAPI_WEBHOOK_URL=https://api.example.com/api/webhook/vapi` and configure Vapi to call that exact URL with `POST`. Production startup requires this explicit canonical HTTPS URL and rejects credentials, another path, a query, a fragment, or a trailing slash. The verifier expects:
 
 - timestamp header `x-vapi-timestamp` (or `VAPI_HMAC_TIMESTAMP_HEADER`),
 - HMAC header `x-vapi-signature` (or `VAPI_HMAC_SIGNATURE_HEADER`), and
@@ -272,14 +437,14 @@ To rotate a data key safely:
 3. Run a controlled, audited key-rotation re-encryption job for every encrypted column and verify no retained ciphertext references the old key ID. The plaintext migration command above is not a key-rotation job; the repository does **not** currently include this bulk rewrite job.
 4. Back up and restore-test the new key material, then remove the old key from all replicas. Never remove an old key while retained database rows still reference it.
 
-Rotate `OAUTH_STATE_SECRET` during a low-traffic window; outstanding ten-minute OAuth states become invalid because this secret has no overlap keyring. Rotate Stripe with the overlapping-secret flow above. Vapi currently accepts one HMAC secret, so coordinate its change and deployment closely. Rotate database, Redis, SMTP, Google, Twilio, and Vapi credentials through their providers, update the secret manager, restart both workloads, confirm health/delivery, and revoke the old value. Record each rotation without recording secret material.
+Rotate `OAUTH_STATE_SECRET` during a low-traffic window; outstanding ten-minute OAuth states become invalid because this secret has no overlap keyring. Rotate Razorpay webhook signing secrets with the overlapping `RAZORPAY_WEBHOOK_SECRETS` flow above. Razorpay API keys have no application-side overlap keyring, so activate the replacement through Razorpay, deploy it to API and worker together, verify provider reads, and only then revoke the old key. Vapi currently accepts one HMAC secret, so coordinate its change and deployment closely. Rotate database, Redis, SMTP, Google, Twilio, and Vapi credentials through their providers, update the secret manager, restart both workloads, confirm health/delivery, and revoke the old value. Record each rotation without recording secret material.
 
 The communication-preference HMAC keyring also supports overlap. Add a new Base64 key to every replica first, then switch `COMMUNICATION_PREFERENCE_HMAC_ACTIVE_KEY_ID` everywhere in one deployment. Reads check all retained key IDs and later STOP/START writes migrate that address to the active hash. Do not remove an old HMAC key until an audited backfill has migrated every stored preference; otherwise old opt-outs become undiscoverable.
 
 ## 7. Backups and restore
 
 - Enable encrypted PostgreSQL point-in-time recovery plus independent scheduled snapshots. Set retention from the approved legal/business policy; do not equate backup retention with application-record retention.
-- Enable Redis persistence and provider-managed backups where available. Redis restoration may replay or lose scheduled work, so reconcile reminder jobs, the outbox, OAuth sessions, call state, and billing export state afterward.
+- Enable Redis persistence and provider-managed backups where available. Redis restoration may replay or lose scheduled work, so reconcile reminder jobs, the outbox, OAuth sessions, call state, the provider webhook inbox, and subscription projection state afterward.
 - Back up encryption keys separately in a restricted recovery vault. A database backup without every referenced encryption key is not recoverable.
 - Run an isolated restore drill at least quarterly and before major schema changes. Verify migration status, tenant counts, representative tenant-scoped reads, encrypted-field decryption, provider connections without sending live traffic, usage totals, and audit-log continuity. Record recovery time and recovery point achieved.
 
@@ -293,7 +458,7 @@ Incident restore sequence:
 
 ## 8. Retention and production go-live gate
 
-The worker enforces explicit, bounded-batch retention for completed provider webhook envelopes, terminal communication request/response payloads and phone endpoints, call transcripts, and terminal outbox rows. Production will not start without all four periods in `.env.example`. These controls intentionally preserve tenant attribution plus immutable usage/cost records.
+The worker enforces explicit, bounded-batch retention for completed provider webhook envelopes, terminal communication request/response payloads and phone endpoints, call transcripts, terminal outbox rows, and completed registration requests. Production will not start without all five periods in `.env.example`. These controls intentionally preserve tenant attribution plus immutable usage/cost records.
 
 This is not a complete legal retention/erasure product. Before processing production PHI, approve a per-record matrix for patients, appointments, call-log metadata, audit/security records, usage/cost/tax evidence, provider systems, and backups. Add tenant offboarding, access/export/deletion requests, legal holds, purge audit evidence, and backup-expiry treatment. The configured payload periods must follow that approved policy, not convenient defaults.
 
@@ -303,11 +468,11 @@ Final go-live checklist:
 - [ ] Migration preflight passes on a restored production-shaped database.
 - [ ] API liveness/readiness and worker/queue alerts are active and tested.
 - [ ] Tenant-isolation authorization tests cover every role, clinic switch, object lookup, export, webhook, provider resource, and billing endpoint.
-- [ ] Stripe test clocks and live-mode smoke tests reconcile usage through invoice totals; spend caps and anomaly alerts are set.
+- [ ] Razorpay Test Mode and Live Mode smoke tests verify subscription authorization, signed-webhook projection, recurring payment state, and cycle-end cancellation; provider spend caps and anomaly alerts are set.
 - [ ] Vapi and Twilio signatures pass through the production proxy; replay, duplicate, invalid-signature, and out-of-order webhook tests pass.
 - [ ] Twilio is tenant-owned and every production Vapi resource is operator-bound platform Vapi; globally unique resources resolve to the expected tenant/clinic, both workloads have the same platform key when enabled, and legacy provider fallback is disabled.
 - [ ] SMTP authentication and all account lifecycle emails work.
 - [ ] Consent, recording, transcript, calendar-PHI, privacy, terms, retention, deletion, BAA/DPA, and incident-response reviews are signed off.
 - [ ] Logs, traces, metrics, support tooling, and backups do not expose secrets or unnecessary patient data.
 - [ ] Rate limits, database/Redis capacity, provider quotas, graceful shutdown, rollback compatibility, and an on-call runbook are load-tested.
-- [ ] A non-patient canary tenant completes registration, subscription, appointment, reminder, cancellation, invoice, and tenant offboarding end to end.
+- [ ] A non-patient canary tenant completes registration, subscription authorization, appointment, reminder, recurring-payment projection, cycle-end cancellation, and tenant offboarding end to end.

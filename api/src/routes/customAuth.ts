@@ -113,8 +113,24 @@ const organizationRegistrationSchema = z.object({
   countryCode: z.string().trim().regex(/^[A-Z]{2}$/).default('IN'),
   defaultCallingCode: z.string().trim().regex(/^\d{1,4}$/).default('91'),
   locale: z.string().trim().regex(/^[a-z]{2,3}(?:-[A-Z]{2})?$/).default('en-IN'),
-  acceptTerms: z.literal(true),
 }).strict();
+
+function emailDeliveryDiagnostic(error: unknown): Record<string, unknown> {
+  return error && typeof error === 'object'
+    ? {
+        name: error instanceof Error ? error.name : undefined,
+        code: 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+        responseCode:
+          'responseCode' in error && typeof error.responseCode === 'number'
+            ? error.responseCode
+            : undefined,
+        command:
+          'command' in error && typeof error.command === 'string'
+            ? error.command
+            : undefined,
+      }
+    : { name: typeof error };
+}
 
 class RegistrationRequestError extends Error {
   constructor(
@@ -352,7 +368,7 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
   try {
     const passwordHash = await hashPassword(input.password);
     const registration = await prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration:${idempotencyKeyHash}`}, 0))`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration:${idempotencyKeyHash}`}, 0))::text`;
       const existingRequest = await tx.organizationRegistrationRequest.findUnique({
         where: { idempotencyKeyHash },
       });
@@ -457,8 +473,6 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
           targetType: 'Organization',
           targetId: organization.id,
           metadata: {
-            termsVersion: process.env.TERMS_VERSION ?? '2026-07-13',
-            privacyVersion: process.env.PRIVACY_VERSION ?? '2026-07-13',
             registrationRequestId: request.id,
           },
           ...getRequestMeta(req),
@@ -489,7 +503,7 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
     let deliveryPending = registration.verificationDeliveryStatus !== 'sent';
     if (deliveryPending) {
       const deliveryClaim = await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration-email:${idempotencyKeyHash}`}, 0))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`registration-email:${idempotencyKeyHash}`}, 0))::text`;
         const request = await tx.organizationRegistrationRequest.findUniqueOrThrow({
           where: { id: registration.requestId },
         });
@@ -516,9 +530,10 @@ router.post('/auth/register-organization', authRateLimit, async (req: Request, r
           data: { verificationDeliveryStatus: 'sent' },
         });
         deliveryPending = false;
-      } catch {
+      } catch (error) {
         console.error('Registration verification email could not be sent', {
           userId: registration.userId,
+          diagnostic: emailDeliveryDiagnostic(error),
         });
         await prisma.organizationRegistrationRequest.updateMany({
           where: { id: registration.requestId, verificationDeliveryStatus: 'sending' },
@@ -839,7 +854,7 @@ router.post('/auth/invites/accept', authRateLimit, async (req: Request, res: Res
   let user: User;
   try {
     user = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${invite.organizationId}`}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`organization-clinics:${invite.organizationId}`}, 0))::text`;
     const durableInvite = await tx.inviteToken.findUnique({
       where: { id: invite.id },
       select: { id: true, clinicId: true, acceptedAt: true, expiresAt: true },
@@ -982,11 +997,20 @@ router.post('/auth/resend-verification', authRateLimit, async (req: Request, res
     where: { email: parsed.data.email },
     select: { id: true, email: true, emailVerifiedAt: true, status: true },
   });
+  let deliveryPending: boolean | undefined;
   if (user && user.status === 'active' && !user.emailVerifiedAt) {
-    await createEmailVerificationToken(user.id, user.email);
-    await securityEvent(req, 'email_verification_resent', { userId: user.id });
+    try {
+      await createEmailVerificationToken(user.id, user.email);
+      await securityEvent(req, 'email_verification_resent', { userId: user.id });
+    } catch (error) {
+      console.error('Verification email resend could not be sent', {
+        userId: user.id,
+        diagnostic: emailDeliveryDiagnostic(error),
+      });
+      deliveryPending = true;
+    }
   }
-  return res.json({ success: true });
+  return res.status(deliveryPending ? 202 : 200).json({ success: true, verificationDeliveryPending: deliveryPending });
 });
 
 router.post('/auth/reset-password', authRateLimit, async (req: Request, res: Response) => {

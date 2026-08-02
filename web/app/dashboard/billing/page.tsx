@@ -2,10 +2,10 @@
 
 import axios from 'axios';
 import Link from 'next/link';
+import Script from 'next/script';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowUpRight,
   BellRing,
   CheckCircle2,
   CreditCard,
@@ -17,7 +17,10 @@ import {
 import api, {
   createIdempotencyKey,
   type BillingSummary,
-  type HostedBillingSession,
+  type BillingSubscription,
+  type RazorpayCancellationResult,
+  type RazorpayCheckoutProof,
+  type RazorpayCheckoutSession,
   type TenantBudget,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -30,13 +33,32 @@ const configuredPlans = (process.env.NEXT_PUBLIC_BILLING_PLAN_KEYS ?? 'starter')
   .map(value => value.trim())
   .filter(Boolean);
 
-function apiError(error: unknown, fallback: string): { message: string; needsMfa: boolean } {
-  if (!axios.isAxiosError(error)) return { message: fallback, needsMfa: false };
+const RAZORPAY_CHECKOUT_SCRIPT = 'https://checkout.razorpay.com/v1/checkout.js';
+
+type IdempotencyKeyDisposition = 'reuse' | 'replace';
+
+function apiError(error: unknown, fallback: string): {
+  message: string;
+  needsMfa: boolean;
+  idempotencyKeyDisposition: IdempotencyKeyDisposition | null;
+} {
+  if (!axios.isAxiosError(error)) {
+    return {
+      message: fallback,
+      needsMfa: false,
+      idempotencyKeyDisposition: null,
+    };
+  }
+  const disposition = error.response?.data?.idempotencyKeyDisposition;
   return {
     message: error.response?.data?.error ?? fallback,
     needsMfa:
       error.response?.data?.mfaSetupRequired === true ||
       error.response?.data?.mfaRequired === true,
+    idempotencyKeyDisposition:
+      disposition === 'reuse' || disposition === 'replace'
+        ? disposition
+        : null,
   };
 }
 
@@ -123,25 +145,44 @@ function usageQuantity(metric: string, quantity: string): string {
 }
 
 function statusStyle(status: string): string {
-  if (['active', 'trialing'].includes(status)) return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
-  if (['past_due', 'unpaid', 'incomplete'].includes(status)) return 'bg-amber-500/10 text-amber-300 border-amber-500/20';
+  if (['active', 'authenticated', 'trialing'].includes(status)) return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+  if (['created', 'pending', 'past_due', 'past_due_grace', 'unpaid', 'incomplete', 'pending_payment'].includes(status)) {
+    return 'bg-amber-500/10 text-amber-300 border-amber-500/20';
+  }
+  if (['halted', 'suspended'].includes(status)) return 'bg-red-500/10 text-red-300 border-red-500/20';
   return 'bg-gray-800 text-gray-300 border-gray-700';
 }
 
-function mayStartCheckout(status: string | undefined): boolean {
-  return !status || ['canceled', 'incomplete_expired'].includes(status);
+function subscriptionPeriodLabel(subscription: BillingSubscription | null): string {
+  if (!subscription) return 'Choose a plan to start service';
+  if (subscription.trialEnd) return `Trial ends ${formatDate(subscription.trialEnd)}`;
+  if (subscription.currentPeriodEnd) {
+    const ends = subscription.cancelAtPeriodEnd || subscription.providerStatus === 'completed';
+    return `${ends ? 'Ends' : 'Renews'} ${formatDate(subscription.currentPeriodEnd)}`;
+  }
+  return subscription.providerStatus === 'completed'
+    ? 'Subscription completed'
+    : 'Billing cycle pending';
 }
 
-function isTrustedBillingUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol === 'https:' && (url.hostname === 'stripe.com' || url.hostname.endsWith('.stripe.com'))) {
-      return true;
-    }
-    return process.env.NODE_ENV !== 'production' && url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
-  } catch {
-    return false;
+function validateCheckoutSession(session: RazorpayCheckoutSession): void {
+  if (
+    session.provider !== 'razorpay' ||
+    !session.checkoutIntentId ||
+    !/^rzp_(?:test|live)_[A-Za-z0-9]+$/.test(session.keyId) ||
+    !/^sub_[A-Za-z0-9]+$/.test(session.subscriptionId) ||
+    !session.merchantName.trim() ||
+    !session.description.trim()
+  ) {
+    throw new Error('The payment provider returned an invalid checkout session');
   }
+  if (session.themeColor && !/^#[0-9A-Fa-f]{6}$/.test(session.themeColor)) {
+    throw new Error('The payment provider returned an invalid checkout theme');
+  }
+}
+
+function checkoutFailureMessage(response: RazorpayPaymentFailure): string {
+  return response.error?.description || response.error?.reason || 'Razorpay could not complete the payment';
 }
 
 interface BudgetFormState {
@@ -181,9 +222,14 @@ export default function BillingPage() {
   const [error, setError] = useState('');
   const [needsMfa, setNeedsMfa] = useState(false);
   const [notice, setNotice] = useState('');
+  const [checkoutScriptReady, setCheckoutScriptReady] = useState(false);
+  const [checkoutScriptFailed, setCheckoutScriptFailed] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(configuredPlans[0] ?? 'starter');
   const [budget, setBudget] = useState<BudgetFormState>(emptyBudget);
   const checkoutIdempotency = useRef(createIdempotencyKey('billing-checkout'));
+  const cancellationIdempotency = useRef(
+    createIdempotencyKey('billing-subscription-cancel')
+  );
 
   const organizationClinics = useMemo(
     () => clinics.filter(clinic => clinic.organizationId === activeOrganizationId),
@@ -218,30 +264,91 @@ export default function BillingPage() {
     void loadSummary();
   }, [activeOrganizationId, loadSummary]);
 
-  useEffect(() => {
-    const result = new URLSearchParams(window.location.search).get('checkout');
-    if (result === 'success') setNotice('Checkout completed. Subscription access updates after the signed billing webhook is processed.');
-    if (result === 'cancelled') setNotice('Checkout was cancelled. No subscription change was made.');
-  }, []);
-
-  const redirectToHostedSession = (session: HostedBillingSession) => {
-    if (!isTrustedBillingUrl(session.url)) throw new Error('Billing provider returned an untrusted redirect URL');
-    window.location.assign(session.url);
-  };
-
   const startCheckout = async () => {
     setBusyAction('checkout');
     setError('');
     setNeedsMfa(false);
+    setNotice('');
     try {
-      const response = await api.post<HostedBillingSession>(
+      const Razorpay = window.Razorpay;
+      if (!checkoutScriptReady || !Razorpay) {
+        throw new Error(
+          checkoutScriptFailed
+            ? 'Razorpay Checkout could not be loaded. Check your connection and refresh the page.'
+            : 'Razorpay Checkout is still loading. Please try again in a moment.'
+        );
+      }
+
+      const response = await api.post<RazorpayCheckoutSession>(
         '/billing/checkout',
         { planKey: selectedPlan },
         { headers: { 'Idempotency-Key': checkoutIdempotency.current } }
       );
-      redirectToHostedSession(response.data);
+      const session = response.data;
+      validateCheckoutSession(session);
+
+      let paymentHandled = false;
+      const checkout = new Razorpay({
+        key: session.keyId,
+        subscription_id: session.subscriptionId,
+        name: session.merchantName,
+        description: session.description,
+        prefill: session.prefill,
+        theme: session.themeColor ? { color: session.themeColor } : undefined,
+        modal: {
+          confirm_close: true,
+          ondismiss: () => {
+            if (!paymentHandled) {
+              setNotice('Checkout was closed. No subscription access change has been made.');
+            }
+          },
+        },
+        handler: async paymentResponse => {
+          paymentHandled = true;
+          setBusyAction('verify-checkout');
+          setError('');
+          setNeedsMfa(false);
+          try {
+            if (paymentResponse.razorpay_subscription_id !== session.subscriptionId) {
+              throw new Error('Razorpay returned a subscription that does not match this checkout');
+            }
+            const proof: RazorpayCheckoutProof = {
+              checkoutIntentId: session.checkoutIntentId,
+              razorpayPaymentId: paymentResponse.razorpay_payment_id,
+              razorpaySubscriptionId: paymentResponse.razorpay_subscription_id,
+              razorpaySignature: paymentResponse.razorpay_signature,
+            };
+            await api.post('/billing/checkout/verify', proof, {
+              headers: { 'Idempotency-Key': createIdempotencyKey('billing-checkout-verify') },
+            });
+            checkoutIdempotency.current = createIdempotencyKey('billing-checkout');
+            setNotice('Payment verified. Your subscription access has been reconciled.');
+            await loadSummary();
+          } catch (requestError) {
+            const detail = apiError(
+              requestError,
+              requestError instanceof Error ? requestError.message : 'Unable to verify the Razorpay checkout'
+            );
+            setError(detail.message);
+            setNeedsMfa(detail.needsMfa);
+          } finally {
+            setBusyAction(null);
+          }
+        },
+      });
+
+      checkout.on('payment.failed', paymentResponse => {
+        paymentHandled = true;
+        setBusyAction(null);
+        setNotice('');
+        setError(checkoutFailureMessage(paymentResponse));
+      });
+      checkout.open();
     } catch (requestError) {
       const detail = apiError(requestError, requestError instanceof Error ? requestError.message : 'Unable to start checkout');
+      if (detail.idempotencyKeyDisposition === 'replace') {
+        checkoutIdempotency.current = createIdempotencyKey('billing-checkout');
+      }
       setError(detail.message);
       setNeedsMfa(detail.needsMfa);
     } finally {
@@ -249,19 +356,48 @@ export default function BillingPage() {
     }
   };
 
-  const openPortal = async () => {
-    setBusyAction('portal');
+  const cancelSubscription = async () => {
+    const cancellationMode = summary?.subscription?.cancellationMode;
+    if (!cancellationMode) return;
+    const immediate = cancellationMode === 'immediate';
+    const confirmed = window.confirm(
+      immediate
+        ? 'Cancel this trial now? Subscription access will end immediately.'
+        : 'Cancel renewal at the end of the current billing cycle? Paid access will continue until then.'
+    );
+    if (!confirmed) return;
+
+    setBusyAction('cancel-subscription');
     setError('');
     setNeedsMfa(false);
+    setNotice('');
     try {
-      const response = await api.post<HostedBillingSession>(
-        '/billing/portal',
+      const response = await api.post<RazorpayCancellationResult>(
+        '/billing/subscription/cancel',
         {},
-        { headers: { 'Idempotency-Key': createIdempotencyKey('billing-portal') } }
+        { headers: { 'Idempotency-Key': cancellationIdempotency.current } }
       );
-      redirectToHostedSession(response.data);
+      cancellationIdempotency.current =
+        createIdempotencyKey('billing-subscription-cancel');
+      setNotice(
+        response.data.cancellationMode === 'immediate'
+          ? 'Subscription cancelled. Access has ended.'
+          : `Renewal cancelled. Paid access continues${
+              response.data.currentPeriodEnd
+                ? ` through ${formatDate(response.data.currentPeriodEnd)}`
+                : ' through the current billing cycle'
+            }.`
+      );
+      await loadSummary();
     } catch (requestError) {
-      const detail = apiError(requestError, requestError instanceof Error ? requestError.message : 'Unable to open billing portal');
+      const detail = apiError(
+        requestError,
+        requestError instanceof Error ? requestError.message : 'Unable to cancel the subscription'
+      );
+      if (detail.idempotencyKeyDisposition === 'replace') {
+        cancellationIdempotency.current =
+          createIdempotencyKey('billing-subscription-cancel');
+      }
       setError(detail.message);
       setNeedsMfa(detail.needsMfa);
     } finally {
@@ -342,7 +478,21 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 lg:p-8">
+    <>
+      <Script
+        id="razorpay-checkout"
+        src={RAZORPAY_CHECKOUT_SCRIPT}
+        strategy="afterInteractive"
+        onReady={() => {
+          setCheckoutScriptReady(true);
+          setCheckoutScriptFailed(false);
+        }}
+        onError={() => {
+          setCheckoutScriptReady(false);
+          setCheckoutScriptFailed(true);
+        }}
+      />
+      <div className="p-4 md:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Billing & usage</h1>
@@ -389,11 +539,7 @@ export default function BillingPage() {
                 <p className="text-xl font-semibold capitalize text-white">{summary.subscription?.status.replaceAll('_', ' ') ?? 'Not started'}</p>
                 <CreditCard className="h-5 w-5 text-blue-400" />
               </div>
-              <p className="mt-3 text-xs text-gray-500">
-                {summary.subscription?.currentPeriodEnd
-                  ? `Renews ${formatDate(summary.subscription.currentPeriodEnd)}`
-                  : 'Choose a plan to start service'}
-              </p>
+              <p className="mt-3 text-xs text-gray-500">{subscriptionPeriodLabel(summary.subscription)}</p>
             </section>
 
             <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
@@ -413,11 +559,16 @@ export default function BillingPage() {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="font-semibold text-white">Subscription controls</h2>
-                <p className="mt-1 text-xs text-gray-500">Payment details are handled on Stripe-hosted pages.</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {summary.billingAccount && summary.billingAccount.provider !== 'razorpay'
+                    ? 'This organization uses a legacy Stripe billing account. Billing changes are disabled until an operator completes the Razorpay cutover.'
+                    : 'Payment authorization is securely handled by Razorpay Checkout.'}
+                </p>
               </div>
               {canManageBilling ? (
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  {mayStartCheckout(summary.subscription?.status) && (
+                  {summary.actions.canStartCheckout &&
+                    (!summary.billingAccount || summary.billingAccount.provider === 'razorpay') && (
                     <>
                       <select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} className={inputClass}>
                         {configuredPlans.map(plan => <option key={plan} value={plan}>{plan}</option>)}
@@ -425,23 +576,26 @@ export default function BillingPage() {
                       <button
                         type="button"
                         onClick={startCheckout}
-                        disabled={busyAction !== null}
+                        disabled={busyAction !== null || !checkoutScriptReady}
                         className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                       >
-                        {busyAction === 'checkout' ? <Loader2 className="h-4 w-4 animate-spin" /> : <WalletCards className="h-4 w-4" />}
-                        Choose plan
+                        {busyAction === 'checkout' || !checkoutScriptReady ? <Loader2 className="h-4 w-4 animate-spin" /> : <WalletCards className="h-4 w-4" />}
+                        {checkoutScriptReady ? 'Choose plan' : 'Loading payments'}
                       </button>
                     </>
                   )}
-                  {summary.billingAccount && (
+                  {summary.billingAccount?.provider === 'razorpay' &&
+                    summary.subscription?.canCancel && (
                     <button
                       type="button"
-                      onClick={openPortal}
+                      onClick={cancelSubscription}
                       disabled={busyAction !== null}
-                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-medium text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-red-500/30 px-4 py-2.5 text-sm font-medium text-red-200 hover:bg-red-500/10 disabled:opacity-50"
                     >
-                      {busyAction === 'portal' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
-                      Payment portal
+                      {busyAction === 'cancel-subscription' && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {summary.subscription.cancellationMode === 'immediate'
+                        ? 'Cancel now'
+                        : 'Cancel renewal'}
                     </button>
                   )}
                 </div>
@@ -449,6 +603,28 @@ export default function BillingPage() {
                 <p className="text-xs text-gray-500">Only the organization owner can change billing.</p>
               )}
             </div>
+            {summary.subscription?.cancelAtPeriodEnd && (
+              <p className="mt-3 text-xs text-amber-300">
+                Renewal is cancelled. Access continues
+                {summary.subscription.currentPeriodEnd
+                  ? ` through ${formatDate(summary.subscription.currentPeriodEnd)}`
+                  : ' through the current billing cycle'}.
+              </p>
+            )}
+            {summary.subscription?.canCancel &&
+              summary.subscription.cancellationMode === 'immediate' && (
+                <p className="mt-3 text-xs text-amber-300">
+                  This subscription has not begun a paid billing cycle. Cancelling it will end access immediately.
+                </p>
+              )}
+            {checkoutScriptFailed &&
+              canManageBilling &&
+              summary.actions.canStartCheckout &&
+              (!summary.billingAccount || summary.billingAccount.provider === 'razorpay') && (
+              <p className="mt-3 text-xs text-red-300">
+                Razorpay Checkout could not be loaded. Check your connection or content blocker, then refresh this page.
+              </p>
+            )}
           </section>
 
           <section className="mt-5 overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
@@ -577,6 +753,7 @@ export default function BillingPage() {
           </div>
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }

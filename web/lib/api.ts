@@ -45,7 +45,30 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const status = error?.response?.status;
+    const serverErrorCode = error?.response?.data?.error;
+    const isCsrfFailure =
+      status === 403 &&
+      (serverErrorCode === 'Invalid CSRF token' || serverErrorCode === 'CSRF token required');
+
+    // The CSRF token fully rotates on every /auth/csrf call (e.g. from a
+    // background refresh() in another tab, or on remount after a reload),
+    // which can invalidate a token still held by an open form. Rather than
+    // surface that as a confusing "Invalid CSRF token" error, transparently
+    // fetch a fresh token and retry the request once.
+    if (isCsrfFailure && !error.config?._csrfRetried) {
+      try {
+        const freshToken = await refreshCsrfToken();
+        if (freshToken) {
+          const retryConfig = { ...error.config, _csrfRetried: true };
+          return api.request(retryConfig);
+        }
+      } catch {
+        // fall through to normal 401/rejection handling below
+      }
+    }
+
     if (
       typeof window !== 'undefined' &&
       error?.response?.status === 401 &&
@@ -255,6 +278,17 @@ export interface Doctor {
   status: string;
 }
 
+export type WeeklyHours = Record<string, { open: string; close: string } | null | undefined>;
+
+export interface DoctorAvailability {
+  doctorId: string;
+  clinicId: string;
+  /** Explicit per-day overrides for this doctor at this clinic. */
+  availability: WeeklyHours;
+  /** The clinic's own business hours, used for any day with no override. */
+  inheritedBusinessHours: WeeklyHours;
+}
+
 export interface DoctorsResponse {
   doctors: Doctor[];
 }
@@ -265,12 +299,15 @@ export interface BillingSubscription {
   id: string;
   planKey: string;
   status: string;
+  providerStatus: string | null;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   trialEnd: string | null;
   cancelAtPeriodEnd: boolean;
   canceledAt: string | null;
   graceUntil: string | null;
+  canCancel: boolean;
+  cancellationMode: 'immediate' | 'period_end' | null;
 }
 
 export interface BillingUsageGroup {
@@ -329,11 +366,38 @@ export interface BillingSummary {
     expiresAt: string | null;
   }>;
   budgets: TenantBudget[];
+  actions: {
+    canStartCheckout: boolean;
+  };
 }
 
-export interface HostedBillingSession {
-  id: string;
-  url: string;
+export interface RazorpayCheckoutSession {
+  provider: 'razorpay';
+  checkoutIntentId: string;
+  keyId: string;
+  subscriptionId: string;
+  merchantName: string;
+  description: string;
+  prefill?: {
+    name?: string;
+    email?: string;
+    contact?: string;
+  };
+  themeColor?: string;
+}
+
+export interface RazorpayCheckoutProof {
+  checkoutIntentId: string;
+  razorpayPaymentId: string;
+  razorpaySubscriptionId: string;
+  razorpaySignature: string;
+}
+
+export interface RazorpayCancellationResult {
+  subscriptionId: string;
+  cancelAtPeriodEnd: boolean;
+  cancellationMode: 'immediate' | 'period_end';
+  currentPeriodEnd: string | null;
 }
 
 // ── Tenant provider integrations ────────────────────────────────────────────

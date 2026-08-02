@@ -2,10 +2,18 @@ import crypto from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { getOperationsConfig } from '../config/operations';
 import { prisma } from '../lib/prisma';
+import {
+  CURRENT_WORKER_TASK_NAMES,
+  evaluateCurrentWorkerTasks,
+  PROCESSING_STALE_AFTER_SECONDS,
+  RAZORPAY_CHECKOUT_STALE_AFTER_SECONDS,
+  RAZORPAY_WEBHOOK_BACKLOG_GRACE_SECONDS,
+  razorpayWebhookBacklogWhere,
+  razorpayOperationsNeedAttention,
+} from '../ops/operationsHealth';
 
 const router = Router();
-const STALE_WORK_ITEM_SECONDS = 5 * 60;
-const STRIPE_EXPORT_RISK_DAYS = 30;
+const RAZORPAY_PROVIDER = 'razorpay';
 
 function tokenDigest(value: string): Buffer {
   return crypto.createHash('sha256').update(value, 'utf8').digest();
@@ -31,16 +39,37 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
   const config = getOperationsConfig();
   const generatedAt = new Date();
   const heartbeatCutoff = new Date(generatedAt.getTime() - config.maxAgeSeconds * 1_000);
-  const staleWorkItemCutoff = new Date(generatedAt.getTime() - STALE_WORK_ITEM_SECONDS * 1_000);
-  const stripeExportRiskCutoff = new Date(
-    generatedAt.getTime() - STRIPE_EXPORT_RISK_DAYS * 86_400_000
+  const staleWorkItemCutoff = new Date(
+    generatedAt.getTime() - PROCESSING_STALE_AFTER_SECONDS * 1_000
+  );
+  const razorpayWebhookBacklogCutoff = new Date(
+    generatedAt.getTime() - RAZORPAY_WEBHOOK_BACKLOG_GRACE_SECONDS * 1_000
+  );
+  const razorpayCheckoutStaleCutoff = new Date(
+    generatedAt.getTime() - RAZORPAY_CHECKOUT_STALE_AFTER_SECONDS * 1_000
   );
 
   try {
-    const [heartbeat, outboxDeadLetter, outboxStale, webhookQuarantined, webhookStale,
-      usageExportQuarantined, usageExportStale, budgetAlertDeadLetter,
-      budgetAlertStale, budgetAlertEvaluationIssues, budgetAlertOverdue,
-      unfinalizedRetailAttempts, stripeUsageAtRisk, workerTasks] = await prisma.$transaction([
+    const [
+      heartbeat,
+      outboxDeadLetter,
+      outboxStale,
+      webhookQuarantined,
+      webhookStale,
+      razorpayWebhookBacklog,
+      razorpayWebhookOverdue,
+      razorpayWebhookQuarantined,
+      razorpayWebhookStale,
+      staleRazorpayCheckoutCreating,
+      expiredRazorpayCheckoutOpen,
+      staleRazorpayCheckoutVerified,
+      budgetAlertDeadLetter,
+      budgetAlertStale,
+      budgetAlertEvaluationIssues,
+      budgetAlertOverdue,
+      unfinalizedRetailAttempts,
+      workerTasks,
+    ] = await prisma.$transaction([
       prisma.workerHeartbeat.findUnique({
         where: { name: config.workerName },
         select: { name: true, lastStartedAt: true, lastSeenAt: true },
@@ -53,9 +82,50 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
       prisma.providerWebhookEvent.count({
         where: { status: 'processing', processingStartedAt: { lt: staleWorkItemCutoff } },
       }),
-      prisma.usageExport.count({ where: { status: 'quarantined' } }),
-      prisma.usageExport.count({
-        where: { status: 'processing', lastAttemptAt: { lt: staleWorkItemCutoff } },
+      prisma.providerWebhookEvent.count({
+        where: razorpayWebhookBacklogWhere(),
+      }),
+      prisma.providerWebhookEvent.count({
+        where: razorpayWebhookBacklogWhere(razorpayWebhookBacklogCutoff),
+      }),
+      prisma.providerWebhookEvent.count({
+        where: {
+          provider: RAZORPAY_PROVIDER,
+          signatureValid: true,
+          status: 'quarantined',
+        },
+      }),
+      prisma.providerWebhookEvent.count({
+        where: {
+          provider: RAZORPAY_PROVIDER,
+          signatureValid: true,
+          status: 'processing',
+          processingStartedAt: { lt: staleWorkItemCutoff },
+        },
+      }),
+      prisma.billingCheckoutSession.count({
+        where: {
+          billingProvider: RAZORPAY_PROVIDER,
+          activeKey: 'active',
+          status: 'creating',
+          updatedAt: { lt: razorpayCheckoutStaleCutoff },
+        },
+      }),
+      prisma.billingCheckoutSession.count({
+        where: {
+          billingProvider: RAZORPAY_PROVIDER,
+          activeKey: 'active',
+          status: 'open',
+          expiresAt: { lt: razorpayCheckoutStaleCutoff },
+        },
+      }),
+      prisma.billingCheckoutSession.count({
+        where: {
+          billingProvider: RAZORPAY_PROVIDER,
+          activeKey: 'active',
+          status: 'verified',
+          updatedAt: { lt: razorpayCheckoutStaleCutoff },
+        },
       }),
       prisma.budgetAlertDelivery.count({ where: { status: 'dead_letter' } }),
       prisma.budgetAlertDelivery.count({
@@ -77,14 +147,11 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
           provider: { in: ['vapi', 'twilio'] },
         },
       }),
-      prisma.usageEvent.count({
-        where: {
-          occurredAt: { lt: stripeExportRiskCutoff },
-          exports: { none: { billingProvider: 'stripe', status: 'exported' } },
-        },
-      }),
       prisma.workerTaskStatus.findMany({
-        where: { workerName: config.workerName },
+        where: {
+          workerName: config.workerName,
+          name: { in: [...CURRENT_WORKER_TASK_NAMES] },
+        },
         orderBy: { name: 'asc' },
         select: {
           name: true,
@@ -99,36 +166,31 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
     ]);
 
     const workerFresh = Boolean(heartbeat && heartbeat.lastSeenAt >= heartbeatCutoff);
-    const workerTaskHealth = workerTasks.map(task => {
-      const reference = task.lastSucceededAt ?? task.lastStartedAt;
-      const ageSeconds = Math.max(
-        0,
-        Math.floor((generatedAt.getTime() - reference.getTime()) / 1_000)
-      );
-      return {
-        ...task,
-        ageSeconds,
-        stale: ageSeconds > task.expectedMaxAgeSeconds,
-      };
+    const workerTaskStatus = evaluateCurrentWorkerTasks(workerTasks, generatedAt);
+    const staleRazorpayCheckoutIntents =
+      staleRazorpayCheckoutCreating +
+      expiredRazorpayCheckoutOpen +
+      staleRazorpayCheckoutVerified;
+    const razorpayNeedsAttention = razorpayOperationsNeedAttention({
+      webhookBacklog: razorpayWebhookBacklog,
+      overdueWebhookBacklog: razorpayWebhookOverdue,
+      quarantinedWebhooks: razorpayWebhookQuarantined,
+      staleWebhookProcessing: razorpayWebhookStale,
+      staleCheckoutIntents: staleRazorpayCheckoutIntents,
     });
-    const workerTasksUnhealthy =
-      workerTaskHealth.length === 0 ||
-      workerTaskHealth.some(task => task.stale || task.consecutiveFailures > 0);
     const needsAttention =
       !workerFresh ||
-      workerTasksUnhealthy ||
+      workerTaskStatus.unhealthy ||
       outboxDeadLetter > 0 ||
       outboxStale > 0 ||
       webhookQuarantined > 0 ||
       webhookStale > 0 ||
-      usageExportQuarantined > 0 ||
-      usageExportStale > 0 ||
+      razorpayNeedsAttention ||
       budgetAlertDeadLetter > 0 ||
       budgetAlertStale > 0 ||
       budgetAlertEvaluationIssues > 0 ||
       budgetAlertOverdue > 0 ||
-      unfinalizedRetailAttempts > 0 ||
-      stripeUsageAtRisk > 0;
+      unfinalizedRetailAttempts > 0;
 
     return res.json({
       status: needsAttention ? 'attention_required' : 'ok',
@@ -142,7 +204,9 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
         ageSeconds: heartbeat
           ? Math.max(0, Math.floor((generatedAt.getTime() - heartbeat.lastSeenAt.getTime()) / 1_000))
           : null,
-        tasks: workerTaskHealth.map(task => ({
+        expectedTaskNames: CURRENT_WORKER_TASK_NAMES,
+        missingTaskNames: workerTaskStatus.missingTaskNames,
+        tasks: workerTaskStatus.tasks.map(task => ({
           name: task.name,
           expectedMaxAgeSeconds: task.expectedMaxAgeSeconds,
           ageSeconds: task.ageSeconds,
@@ -155,17 +219,28 @@ router.get('/ops/status', requireOperationsToken, async (_req, res) => {
         })),
       },
       workItems: {
-        staleAfterSeconds: STALE_WORK_ITEM_SECONDS,
+        staleAfterSeconds: PROCESSING_STALE_AFTER_SECONDS,
         outbox: { deadLetter: outboxDeadLetter, staleProcessing: outboxStale },
         providerWebhooks: {
           quarantined: webhookQuarantined,
           staleProcessing: webhookStale,
+          razorpay: {
+            backlog: razorpayWebhookBacklog,
+            overdueBacklog: razorpayWebhookOverdue,
+            backlogGraceSeconds: RAZORPAY_WEBHOOK_BACKLOG_GRACE_SECONDS,
+            quarantined: razorpayWebhookQuarantined,
+            staleProcessing: razorpayWebhookStale,
+            processingStaleAfterSeconds: PROCESSING_STALE_AFTER_SECONDS,
+          },
         },
-        usageExports: {
-          quarantined: usageExportQuarantined,
-          staleProcessing: usageExportStale,
-          olderThanDaysUnexported: STRIPE_EXPORT_RISK_DAYS,
-          atRisk: stripeUsageAtRisk,
+        billingCheckoutIntents: {
+          razorpay: {
+            staleAfterSeconds: RAZORPAY_CHECKOUT_STALE_AFTER_SECONDS,
+            staleCreating: staleRazorpayCheckoutCreating,
+            expiredOpen: expiredRazorpayCheckoutOpen,
+            awaitingProjection: staleRazorpayCheckoutVerified,
+            staleTotal: staleRazorpayCheckoutIntents,
+          },
         },
         budgetAlerts: {
           deadLetter: budgetAlertDeadLetter,

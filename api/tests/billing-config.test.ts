@@ -1,26 +1,28 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, test } from 'node:test';
 import { tenantBudgetInputSchema } from '../src/billing/budgets';
-import { getStripePlans, planKeyForPriceIds } from '../src/billing/config';
-import { USAGE_METRICS, USAGE_METRIC_VALUES } from '../src/billing/metrics';
+import {
+  getRazorpayPlans,
+  planKeyForRazorpayPlanId,
+} from '../src/billing/config';
+import { USAGE_METRICS } from '../src/billing/metrics';
 import {
   PriceCatalogConfigurationError,
   parseConfiguredPriceVersions,
 } from '../src/billing/priceCatalog';
 
-const originalPlanConfig = process.env.STRIPE_PLAN_CONFIG_JSON;
+const originalPlanConfig = process.env.RAZORPAY_PLAN_CONFIG_JSON;
 
 function completePlan() {
   return {
     currency: 'INR',
-    basePriceId: 'price_Base',
-    licensedPrices: [],
-    meteredPriceIds: Object.fromEntries(
-      USAGE_METRIC_VALUES.map((metric, index) => [metric, `price_Metric${index}`])
-    ),
-    meterEventNames: Object.fromEntries(
-      USAGE_METRIC_VALUES.map(metric => [metric, metric])
-    ),
+    planId: 'plan_00000000000001',
+    amountMinor: 49900,
+    period: 'monthly' as const,
+    interval: 1,
+    quantity: 1,
+    totalCount: 120,
+    customerNotify: true,
     entitlements: {
       'appointments.write': true,
       'communications.voice': true,
@@ -31,44 +33,31 @@ function completePlan() {
 }
 
 beforeEach(() => {
-  process.env.STRIPE_PLAN_CONFIG_JSON = JSON.stringify({ starter: completePlan() });
+  process.env.RAZORPAY_PLAN_CONFIG_JSON = JSON.stringify({ starter: completePlan() });
 });
 
 afterEach(() => {
-  if (originalPlanConfig === undefined) delete process.env.STRIPE_PLAN_CONFIG_JSON;
-  else process.env.STRIPE_PLAN_CONFIG_JSON = originalPlanConfig;
+  if (originalPlanConfig === undefined) delete process.env.RAZORPAY_PLAN_CONFIG_JSON;
+  else process.env.RAZORPAY_PLAN_CONFIG_JSON = originalPlanConfig;
 });
 
-test('the billing plan accepts every metric emitted by production usage paths', () => {
-  const plan = getStripePlans().starter;
-  assert.deepEqual(Object.keys(plan.meteredPriceIds).sort(), [...USAGE_METRIC_VALUES].sort());
-  assert.deepEqual(Object.keys(plan.meterEventNames).sort(), [...USAGE_METRIC_VALUES].sort());
+test('the billing plan accepts a fixed Razorpay subscription and local entitlements', () => {
+  const plan = getRazorpayPlans().starter;
+  assert.equal(plan.planId, 'plan_00000000000001');
+  assert.equal(plan.amountMinor, 49900);
+  assert.equal(plan.period, 'monthly');
+  assert.equal(plan.entitlements['communications.voice'], true);
 });
 
-test('a plan must pair each metered price with one meter event name', () => {
+test('Stripe metering fields cannot enter the fixed Razorpay plan configuration', () => {
   const plan = completePlan();
-  delete plan.meterEventNames[USAGE_METRICS.VOICE_SECONDS];
-  process.env.STRIPE_PLAN_CONFIG_JSON = JSON.stringify({ starter: plan });
+  const legacyPlan = {
+    ...plan,
+    meteredPriceIds: { voice_seconds: 'price_Legacy' },
+  };
+  process.env.RAZORPAY_PLAN_CONFIG_JSON = JSON.stringify({ starter: legacyPlan });
 
-  assert.throws(() => getStripePlans(), /meter event name is required/);
-});
-
-test('enabled communication features cannot omit usage their runtime can emit', () => {
-  const plan = completePlan();
-  delete plan.meteredPriceIds[USAGE_METRICS.VAPI_TTS_CHARACTERS];
-  delete plan.meterEventNames[USAGE_METRICS.VAPI_TTS_CHARACTERS];
-  process.env.STRIPE_PLAN_CONFIG_JSON = JSON.stringify({ starter: plan });
-
-  assert.throws(() => getStripePlans(), /require metered usage metric vapi_tts_characters/);
-});
-
-test('unimplemented usage dimensions cannot enter plan or budget configuration', () => {
-  const plan = completePlan();
-  (plan.meteredPriceIds as Record<string, string>).compute_milliseconds = 'price_Compute';
-  (plan.meterEventNames as Record<string, string>).compute_milliseconds = 'compute_milliseconds';
-  process.env.STRIPE_PLAN_CONFIG_JSON = JSON.stringify({ starter: plan });
-
-  assert.throws(() => getStripePlans(), /Invalid STRIPE_PLAN_CONFIG_JSON/);
+  assert.throws(() => getRazorpayPlans(), /Invalid RAZORPAY_PLAN_CONFIG_JSON/);
   assert.equal(tenantBudgetInputSchema.safeParse({
     metric: 'compute_milliseconds',
     period: 'monthly',
@@ -92,13 +81,19 @@ test('post-consumption Vapi metrics cannot promise a pre-dispatch hard block', (
   }).success, true);
 });
 
-test('plan matching requires the exact recurring Stripe price set', () => {
+test('Razorpay plan IDs must be unique across public plan keys', () => {
   const plan = completePlan();
-  const allPrices = [plan.basePriceId, ...Object.values(plan.meteredPriceIds)];
+  process.env.RAZORPAY_PLAN_CONFIG_JSON = JSON.stringify({
+    starter: plan,
+    growth: { ...plan, amountMinor: 99900 },
+  });
 
-  assert.equal(planKeyForPriceIds(allPrices), 'starter');
-  assert.equal(planKeyForPriceIds(allPrices.slice(0, -1)), null);
-  assert.equal(planKeyForPriceIds([...allPrices, 'price_Unexpected']), null);
+  assert.throws(() => getRazorpayPlans(), /plan IDs must be unique/);
+});
+
+test('plan matching requires the exact configured Razorpay plan ID', () => {
+  assert.equal(planKeyForRazorpayPlanId('plan_00000000000001'), 'starter');
+  assert.equal(planKeyForRazorpayPlanId('plan_00000000000002'), null);
 });
 
 test('the local rate parser preserves precise unit quantities', () => {

@@ -29,8 +29,8 @@ COPY --chown=node:node src ./src
 RUN npm exec -- prisma generate \
     && npm run build
 
-# A separate image target keeps the Prisma CLI out of the API/worker runtime.
-# Build this target for the one-shot migration job.
+# Build this target for the one-shot migration job. It intentionally retains
+# the build dependency tree, including the Prisma CLI.
 FROM build AS migration
 
 ENV NODE_ENV=production
@@ -41,7 +41,13 @@ CMD ["./node_modules/.bin/prisma", "migrate", "deploy"]
 
 FROM build AS production-dependencies
 
+# @prisma/client declares the Prisma CLI as an optional peer, so npm can retain
+# it even after pruning devDependencies. The generated client and query engine
+# live under @prisma/client and .prisma; remove only the CLI.
 RUN npm prune --omit=dev \
+    && rm -rf node_modules/prisma \
+    && rm -f node_modules/.bin/prisma \
+    && node -e "require('@prisma/client')" \
     && npm cache clean --force
 
 FROM base AS runtime

@@ -96,7 +96,7 @@ model Organization {
   providerWebhookEvents    ProviderWebhookEvent[]
   usageEvents              UsageEvent[]
   providerCostEntries      ProviderCostEntry[]
-  billingAccount           BillingAccount?
+  billingAccounts          BillingAccount[]
   billingCheckoutSessions  BillingCheckoutSession[]
   subscriptions            SubscriptionMirror[]
   entitlements             Entitlement[]
@@ -698,6 +698,7 @@ model ProviderWebhookEvent {
   status                 String    @default("received")
   processingAttempts     Int       @default(0)
   processingStartedAt    DateTime?
+  nextAttemptAt          DateTime?
   lastError              String?
   receivedAt             DateTime  @default(now())
   processedAt            DateTime?
@@ -710,7 +711,7 @@ model ProviderWebhookEvent {
 
   @@unique([provider, idempotencyKey])
   @@index([provider, externalEventId])
-  @@index([status, processingStartedAt, receivedAt])
+  @@index([status, nextAttemptAt, processingStartedAt, receivedAt], map: "ProviderWebhookEvent_status_retry_processing_received_idx")
   @@index([organizationId, receivedAt])
   @@index([payloadPurgedAt, receivedAt])
 }
@@ -819,9 +820,10 @@ model PriceVersion {
 
 model BillingAccount {
   id                 String   @id @default(uuid())
-  organizationId     String   @unique
+  organizationId     String
   billingProvider    String
-  externalCustomerId String
+  activeKey          String?  @default("current")
+  externalCustomerId String?
   status             String   @default("pending")
   billingEmail       String?
   currency           String   @default("INR")
@@ -835,14 +837,17 @@ model BillingAccount {
   subscriptions    SubscriptionMirror[]
   checkoutSessions BillingCheckoutSession[]
 
+  @@unique([organizationId, billingProvider])
+  @@unique([organizationId, activeKey])
   @@unique([billingProvider, externalCustomerId])
   @@unique([id, organizationId])
+  @@unique([id, organizationId, billingProvider])
   @@index([status])
 }
 
-/// Durable, tenant-scoped state for hosted subscription checkout. The activeKey
+/// Durable, tenant-scoped state for subscription authorization. The activeKey
 /// unique constraint makes Checkout single-flight even when callers use different
-/// HTTP idempotency keys before a Stripe webhook has projected the subscription.
+/// HTTP idempotency keys before a provider webhook has projected the subscription.
 model BillingCheckoutSession {
   id                   String    @id @default(uuid())
   organizationId       String
@@ -853,15 +858,17 @@ model BillingCheckoutSession {
   status               String    @default("creating")
   activeKey            String?
   externalSessionId    String?
+  externalPaymentId    String?
   sessionUrlCiphertext String?
   expiresAt            DateTime
+  checkoutVerifiedAt   DateTime?
   completedAt          DateTime?
   lastError            String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  billingAccount BillingAccount @relation(fields: [billingAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId, organizationId, billingProvider], references: [id, organizationId, billingProvider], onDelete: Cascade, map: "BillingCheckoutSession_billingAccountId_org_provider_fkey")
 
   @@unique([billingProvider, externalSessionId])
   @@unique([organizationId, billingProvider, requestKeyHash], map: "BillingCheckoutSession_org_provider_request_key")
@@ -878,6 +885,7 @@ model SubscriptionMirror {
   externalSubscriptionId     String
   planKey                    String
   status                     String
+  providerStatus             String?
   activeKey                  String?
   currentPeriodStart         DateTime?
   currentPeriodEnd           DateTime?
@@ -886,19 +894,52 @@ model SubscriptionMirror {
   canceledAt                 DateTime?
   graceUntil                 DateTime?
   providerPayload            Json?
+  lastProviderEventId        String?
   lastProviderEventCreatedAt DateTime?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
 
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  billingAccount BillingAccount @relation(fields: [billingAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  entitlements   Entitlement[]
+  organization         Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount       BillingAccount               @relation(fields: [billingAccountId, organizationId, billingProvider], references: [id, organizationId, billingProvider], onDelete: Cascade, map: "SubscriptionMirror_billingAccountId_org_provider_fkey")
+  entitlements         Entitlement[]
+  cancellationAttempts BillingCancellationAttempt[]
 
   @@unique([billingProvider, externalSubscriptionId])
   @@unique([id, organizationId])
   @@unique([organizationId, billingProvider, activeKey])
   @@index([organizationId, status])
   @@index([currentPeriodEnd])
+}
+
+/// Durable, indexed idempotency and reconciliation state for provider
+/// cancellation mutations. activeKey keeps one unresolved mutation per
+/// subscription while preserving terminal attempts for audit and replay.
+model BillingCancellationAttempt {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  subscriptionMirrorId String
+  billingProvider      String
+  requestHash          String
+  requestedByUserId    String
+  mode                 String
+  status               String    @default("submitting")
+  activeKey            String?   @default("active")
+  requestedAt          DateTime  @default(now())
+  confirmedAt          DateTime?
+  nextAttemptAt        DateTime?
+  processingStartedAt  DateTime?
+  leaseToken           String?
+  attempts             Int       @default(0)
+  lastError            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  subscriptionMirror SubscriptionMirror @relation(fields: [subscriptionMirrorId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([organizationId, billingProvider, requestHash], map: "BillingCancellationAttempt_org_provider_request_key")
+  @@unique([subscriptionMirrorId, activeKey], map: "BillingCancellationAttempt_subscription_active_key")
+  @@index([billingProvider, status, nextAttemptAt, processingStartedAt, createdAt], map: "BillingCancellationAttempt_provider_status_retry_processing_idx")
+  @@index([subscriptionMirrorId, status, createdAt])
 }
 
 /// Materialized tenant entitlement snapshot used in the request path.

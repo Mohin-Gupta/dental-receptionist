@@ -1,14 +1,13 @@
 import { redirect } from 'next/navigation';
 
-interface LegacyBillingReturnProps {
+interface BillingReturnProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 /**
- * Compatibility return path for existing Stripe success/cancel URLs.
- * Keep this route until every configured Stripe Price uses /dashboard/billing.
+ * Compatibility path for old billing bookmarks.
  */
-export default async function LegacyBillingReturn({ searchParams }: LegacyBillingReturnProps) {
+export default async function BillingReturn({ searchParams }: BillingReturnProps) {
   const values = await searchParams;
   const query = new URLSearchParams();
 

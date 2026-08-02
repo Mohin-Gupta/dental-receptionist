@@ -19,7 +19,9 @@ export async function getBillingSummary(organizationId: string) {
       id: true,
       planTier: true,
       status: true,
-      billingAccount: {
+      billingAccounts: {
+        where: { activeKey: 'current' },
+        take: 1,
         select: {
           billingProvider: true,
           status: true,
@@ -31,12 +33,14 @@ export async function getBillingSummary(organizationId: string) {
               id: true,
               planKey: true,
               status: true,
+              providerStatus: true,
               currentPeriodStart: true,
               currentPeriodEnd: true,
               trialEnd: true,
               cancelAtPeriodEnd: true,
               canceledAt: true,
               graceUntil: true,
+              providerPayload: true,
             },
           },
         },
@@ -76,7 +80,42 @@ export async function getBillingSummary(organizationId: string) {
   });
   if (!organization) throw new Error('Organization not found');
 
-  const subscription = organization.billingAccount?.subscriptions[0] ?? null;
+  const billingAccount = organization.billingAccounts[0] ?? null;
+  const subscription = billingAccount?.subscriptions[0] ?? null;
+  const providerPayload = (
+    subscription?.providerPayload &&
+    !Array.isArray(subscription.providerPayload) &&
+    typeof subscription.providerPayload === 'object'
+  ) ? subscription.providerPayload as Record<string, unknown> : {};
+  const remainingCount = typeof providerPayload.remainingCount === 'number'
+    ? providerPayload.remainingCount
+    : null;
+  const cancellationMode = (() => {
+    if (
+      !subscription ||
+      billingAccount?.billingProvider !== 'razorpay' ||
+      subscription.cancelAtPeriodEnd ||
+      ['canceled', 'completed', 'expired'].includes(subscription.status) ||
+      (remainingCount !== null && remainingCount <= 1)
+    ) {
+      return null;
+    }
+    if (
+      ['created', 'authenticated'].includes(subscription.providerStatus ?? '')
+    ) {
+      return 'immediate' as const;
+    }
+    if (
+      ['active', 'pending', 'halted', 'paused'].includes(
+        subscription.providerStatus ?? ''
+      ) &&
+      subscription.currentPeriodStart &&
+      subscription.currentPeriodEnd
+    ) {
+      return 'period_end' as const;
+    }
+    return null;
+  })();
   const fallback = defaultBillingPeriod();
   const periodStart = subscription?.currentPeriodStart ?? fallback.start;
   const periodEnd = subscription?.currentPeriodEnd ?? fallback.end;
@@ -131,14 +170,33 @@ export async function getBillingSummary(organizationId: string) {
       status: organization.status,
       planKey: organization.planTier,
     },
-    billingAccount: organization.billingAccount
+    billingAccount: billingAccount
       ? {
-          provider: organization.billingAccount.billingProvider,
-          status: organization.billingAccount.status,
-          currency: organization.billingAccount.currency,
+          provider: billingAccount.billingProvider,
+          status: billingAccount.status,
+          currency: billingAccount.currency,
         }
       : null,
-    subscription,
+    subscription: subscription
+      ? {
+          id: subscription.id,
+          planKey: subscription.planKey,
+          status: subscription.status,
+          providerStatus: subscription.providerStatus,
+          currentPeriodStart: subscription.currentPeriodStart,
+          currentPeriodEnd: subscription.currentPeriodEnd,
+          trialEnd: subscription.trialEnd,
+          cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+          canceledAt: subscription.canceledAt,
+          graceUntil: subscription.graceUntil,
+          canCancel: cancellationMode !== null,
+          cancellationMode,
+        }
+      : null,
+    actions: {
+      canStartCheckout: !subscription &&
+        (!billingAccount || billingAccount.billingProvider === 'razorpay'),
+    },
     period: { start: periodStart, end: periodEnd },
     usage: groups.map((group) => ({
       metric: group.metric,

@@ -124,7 +124,7 @@ router.post('/dashboard/doctors', requirePermission('settings:write'), async (re
       yearsExperience: body.yearsExperience,
       specialty: body.specialty,
       clinics: {
-        create: requestedClinicIds.map((clinicId) => ({ clinicId, organizationId })),
+        create: requestedClinicIds.map((clinicId) => ({ clinicId })),
       },
     },
     include: {

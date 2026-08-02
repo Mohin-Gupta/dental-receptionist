@@ -156,8 +156,8 @@ export async function evaluateTenantBudgetAlerts(pageSize = 500): Promise<number
           await prisma.subscriptionMirror.findFirst({
             where: {
               organizationId: budget.organizationId,
-              billingProvider: 'stripe',
               activeKey: 'current',
+              billingAccount: { activeKey: 'current' },
             },
             select: { currentPeriodStart: true, currentPeriodEnd: true },
           })
@@ -274,7 +274,7 @@ export async function evaluateTenantBudgetAlerts(pageSize = 500): Promise<number
             metric: budget.metric,
             period: budget.period,
           });
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text`;
           const stillActive = await tx.tenantBudget.findFirst({
             where: {
               id: budget.id,
