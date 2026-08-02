@@ -7,6 +7,7 @@ import { auditAction } from '../../auth/audit';
 import { requirePermission } from '../../auth/middleware';
 import { toE164 } from '../../lib/phone';
 import { publicClinicSelect } from '../../services/publicClinic';
+import { weeklyHoursSchema } from '../../lib/businessHoursSchema';
 
 const router = createRouter();
 
@@ -15,17 +16,7 @@ const nullableEmail = z
   .union([z.string().trim().email().max(254), z.literal(''), z.null()])
   .transform((value) => value === '' ? null : value);
 const serviceList = z.array(z.string().trim().min(1).max(160)).max(100).nullable();
-const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Time must use HH:MM format');
-const openingHours = z.object({ open: time, close: time }).strict().nullable();
-const businessHours = z.object({
-  mon: openingHours.optional(),
-  tue: openingHours.optional(),
-  wed: openingHours.optional(),
-  thu: openingHours.optional(),
-  fri: openingHours.optional(),
-  sat: openingHours.optional(),
-  sun: openingHours.optional(),
-}).strict();
+const businessHours = weeklyHoursSchema;
 
 const timezone = z.string().trim().min(1).max(100).refine((value) => {
   try {

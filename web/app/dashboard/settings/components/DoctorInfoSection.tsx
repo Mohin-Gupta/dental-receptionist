@@ -4,6 +4,7 @@ import api, { Doctor } from '@/lib/api';
 
 import Field from './Field';
 import Section from './Section';
+import DoctorAvailabilityEditor from './DoctorAvailabilityEditor';
 
 interface Props {
   doctors: Doctor[];
@@ -35,6 +36,9 @@ export default function DoctorInfoSection({
 
   const [error, setError] =
     useState('');
+
+  const [expandedDoctorId, setExpandedDoctorId] =
+    useState<string | null>(null);
 
   const update = (
     key: keyof ReturnType<typeof emptyDoctorForm>,
@@ -130,6 +134,30 @@ export default function DoctorInfoSection({
                     <p>{doctor.email}</p>
                   )}
                 </div>
+
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedDoctorId((prev) =>
+                        prev === doctor.id ? null : doctor.id
+                      )
+                    }
+                    className="mt-3 text-xs text-blue-400 hover:text-blue-300"
+                  >
+                    {expandedDoctorId === doctor.id
+                      ? 'Hide availability'
+                      : 'Set availability'}
+                  </button>
+                )}
+
+                {expandedDoctorId === doctor.id && (
+                  <DoctorAvailabilityEditor
+                    doctorId={doctor.id}
+                    doctorName={doctor.name}
+                    onClose={() => setExpandedDoctorId(null)}
+                  />
+                )}
               </div>
             ))
           )}

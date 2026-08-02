@@ -278,6 +278,17 @@ export interface Doctor {
   status: string;
 }
 
+export type WeeklyHours = Record<string, { open: string; close: string } | null | undefined>;
+
+export interface DoctorAvailability {
+  doctorId: string;
+  clinicId: string;
+  /** Explicit per-day overrides for this doctor at this clinic. */
+  availability: WeeklyHours;
+  /** The clinic's own business hours, used for any day with no override. */
+  inheritedBusinessHours: WeeklyHours;
+}
+
 export interface DoctorsResponse {
   doctors: Doctor[];
 }
