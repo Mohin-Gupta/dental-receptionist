@@ -55,3 +55,51 @@ DOCTOR INFORMATION:
 - Doctors: ${doctorsText}
 `.trim();
 }
+
+const DAY_LABELS: Record<string, string> = {
+  mon: 'Monday',
+  tue: 'Tuesday',
+  wed: 'Wednesday',
+  thu: 'Thursday',
+  fri: 'Friday',
+  sat: 'Saturday',
+  sun: 'Sunday',
+};
+
+/**
+ * Flat per-call variables for Vapi's assistantOverrides.variableValues, so a
+ * single shared assistant can speak as whichever clinic was actually dialed
+ * (see routes/vapi.webhook.ts assistant-request handling) instead of a
+ * hardcoded clinic name baked into the system prompt.
+ */
+export async function buildClinicVariables(clinicId: string): Promise<Record<string, string>> {
+  const clinic = await prisma.clinic.findUnique({
+    where: { id: clinicId },
+    include: { organization: true },
+  });
+  if (!clinic) return {};
+
+  const services = Array.isArray(clinic.clinicServices)
+    ? (clinic.clinicServices as string[]).join(', ')
+    : '';
+
+  const businessHours = clinic.businessHours as Record<string, { open: string; close: string } | null>;
+  const hoursText = (['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const)
+    .map((day) => {
+      const hours = businessHours?.[day];
+      return `${DAY_LABELS[day]}: ${hours ? `${hours.open}-${hours.close}` : 'Closed'}`;
+    })
+    .join(', ');
+
+  return {
+    clinicName: clinic.name,
+    clinicAddress: clinic.clinicAddress ?? '',
+    clinicPhone: clinic.phone,
+    clinicEmail: clinic.clinicEmail ?? '',
+    clinicWebsite: clinic.clinicWebsite ?? clinic.organization.website ?? '',
+    clinicAbout: clinic.clinicAbout ?? '',
+    clinicServices: services,
+    clinicHours: hoursText,
+    organizationName: clinic.organization.name,
+  };
+}

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { encryptSecret } from '../auth/secretBox';
 import { requireMachineAuth } from '../auth/middleware';
 import { prisma } from '../lib/prisma';
+import { buildClinicVariables } from '../services/clinicInfo';
 import { phonesMatch, toE164 } from '../lib/phone';
 import { extractDirectionAndPhone, extractDurationSecs } from '../lib/vapiPayloadHelpers';
 import {
@@ -536,7 +537,10 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
         });
       }
       response = admitted && tenant.inboundAssistantId
-        ? { assistantId: tenant.inboundAssistantId }
+        ? {
+            assistantId: tenant.inboundAssistantId,
+            assistantOverrides: { variableValues: await buildClinicVariables(tenant.clinicId) },
+          }
         : { error: 'This clinic service is temporarily unavailable. Please call the clinic again later.' };
     } else if (message.type === 'tool-calls') {
       const admitted = await reserveInboundCommercialAccess(tenant);
