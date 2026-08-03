@@ -19,6 +19,10 @@ export const timeSchema = z
 export const openingHoursSchema = z
   .object({ open: timeSchema, close: timeSchema })
   .strict()
+  .refine((value) => value.open < value.close, {
+    message: 'Opening time must be earlier than closing time',
+    path: ['close'],
+  })
   .nullable();
 
 /**

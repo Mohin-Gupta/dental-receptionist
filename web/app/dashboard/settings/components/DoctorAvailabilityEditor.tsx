@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 
 import api, { DoctorAvailability, WeeklyHours } from '@/lib/api';
 
@@ -71,7 +72,10 @@ export default function DoctorAvailabilityEditor({
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
       console.error(err);
-      setError('Failed to save availability.');
+      const serverMessage = axios.isAxiosError(err) && typeof err.response?.data?.error === 'string'
+        ? err.response.data.error
+        : null;
+      setError(serverMessage ?? 'Failed to save availability.');
     } finally {
       setSaving(false);
     }

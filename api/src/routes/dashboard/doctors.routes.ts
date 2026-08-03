@@ -184,6 +184,12 @@ router.patch('/dashboard/doctors/:id', requirePermission('settings:write'), asyn
 
   const doctor = await prisma.$transaction(async (tx) => {
     if (body.clinicIds) {
+      const previousClinicIds = existing.clinics.map((assignment) => assignment.clinicId);
+      const nextClinicIds = new Set(body.clinicIds);
+      const removedClinicIds = previousClinicIds.filter(
+        (clinicId) => !nextClinicIds.has(clinicId)
+      );
+
       await tx.doctorClinic.deleteMany({ where: { doctorId: existing.id } });
       await tx.doctorClinic.createMany({
         data: body.clinicIds.map((clinicId) => ({
@@ -193,6 +199,15 @@ router.patch('/dashboard/doctors/:id', requirePermission('settings:write'), asyn
         })),
         skipDuplicates: true,
       });
+
+      // A dropped clinic assignment should also drop this doctor's
+      // clinic-specific availability overrides, otherwise re-linking the
+      // doctor to the same clinic later silently resurrects stale hours.
+      if (removedClinicIds.length > 0) {
+        await tx.doctorAvailability.deleteMany({
+          where: { doctorId: existing.id, organizationId, clinicId: { in: removedClinicIds } },
+        });
+      }
     }
 
     return tx.doctor.update({
