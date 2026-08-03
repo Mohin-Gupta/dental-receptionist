@@ -1,14 +1,11 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { formatInTimezone } from '../lib/timezone';
 import {
   AppointmentCommandError,
   rescheduleAppointmentCommand,
 } from '../services/appointmentCommands';
-import {
-  CALLER_VERIFICATION_REQUIRED,
-  isVerifiedCallPatient,
-} from './callerVerification';
+import { callerVerificationRequired, isVerifiedCallPatient } from './callerVerification';
+import { fail, firstNameOf, isoDateAndTime, ok, ToolResponse } from './toolResponse';
 
 const rescheduleAppointmentSchema = z.object({
   appointmentId: z.string().trim().uuid(),
@@ -25,10 +22,13 @@ export async function rescheduleAppointment(
   callId: string,
   parameters: unknown,
   callerNumber?: string
-): Promise<string> {
+): Promise<ToolResponse> {
   const parsed = rescheduleAppointmentSchema.safeParse(parameters);
   if (!parsed.success) {
-    return 'Missing or invalid details. A verified appointment, date in YYYY-MM-DD format, and valid time are required.';
+    return fail(
+      'INVALID_INPUT',
+      'The reschedule details were missing or invalid. A verified appointment, a date in YYYY-MM-DD format, and a valid time are required. Ask the patient, in their current language, to repeat the details.'
+    );
   }
 
   const appointment = await prisma.appointment.findFirst({
@@ -50,7 +50,7 @@ export async function rescheduleAppointment(
     appointment.organizationId !== appointment.clinic.organizationId ||
     !(await isVerifiedCallPatient(clinicId, callId, appointment.patientId))
   ) {
-    return CALLER_VERIFICATION_REQUIRED;
+    return callerVerificationRequired();
   }
 
   const operationKey = [
@@ -73,29 +73,46 @@ export async function rescheduleAppointment(
       idempotencyKey: operationKey,
       source: 'voice',
     });
-    const { readableDate, readableTime } = formatInTimezone(
-      result.appointment.startAt,
-      appointment.clinic.timezone
+    const { date, time } = isoDateAndTime(result.appointment.startAt, appointment.clinic.timezone);
+    const patientFirstName = firstNameOf(appointment.patient.name);
+    const code = result.duplicate ? 'ALREADY_RESCHEDULED' : 'RESCHEDULED';
+
+    return ok(
+      code,
+      'Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that the appointment has been moved to data.date at data.time, and that a reminder will be sent. Then ask if there is anything else you can help with. If they say no or goodbye, say a warm closing and end the call in the same turn.',
+      { date, time, patientFirstName }
     );
-    const firstName = appointment.patient.name.trim().split(/\s+/)[0] || 'there';
-    const prefix = result.duplicate ? 'Already rescheduled.' : 'Rescheduled successfully.';
-    return `${prefix} Say EXACTLY: "All done, ${firstName}. Your appointment has been moved to ${readableDate} at ${readableTime}. We will send you a reminder. Is there anything else I can help you with?" If no or bye say "Take care" and end the call.`;
   } catch (error) {
     if (error instanceof AppointmentCommandError) {
       if (error.code === 'slot_unavailable') {
-        return 'That requested slot is no longer available. Ask the patient to choose another available time.';
+        return fail(
+          'SLOT_UNAVAILABLE',
+          'That requested slot is no longer available. Ask the patient, in their current language, to choose another available time.'
+        );
       }
       if (error.code === 'invalid_input') {
-        return 'Could not use the new date or time. Ask the patient to choose another future slot.';
+        return fail(
+          'INVALID_DATE_TIME',
+          'The new date or time could not be used. Ask the patient, in their current language, to choose another future slot.'
+        );
       }
       if (error.code === 'organization_inactive' || error.code === 'commercial_access') {
-        return 'Automatic rescheduling is temporarily unavailable. Offer to have clinic staff call back.';
+        return fail(
+          'RESCHEDULE_UNAVAILABLE',
+          'Automatic rescheduling is temporarily unavailable. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
       if (error.code === 'not_active' || error.code === 'not_found') {
-        return 'That verified appointment can no longer be rescheduled automatically. Offer to have clinic staff call back.';
+        return fail(
+          'CANNOT_RESCHEDULE_AUTOMATICALLY',
+          'That verified appointment can no longer be rescheduled automatically. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
       if (error.code === 'concurrent_change') {
-        return 'That appointment changed while I was processing it. Do not retry the change; offer to have clinic staff call back.';
+        return fail(
+          'CONCURRENT_CHANGE',
+          'That appointment changed while this was being processed. Do not retry the change. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
     }
     throw error;

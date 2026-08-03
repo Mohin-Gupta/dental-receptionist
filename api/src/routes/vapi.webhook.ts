@@ -44,6 +44,7 @@ import {
   storeName,
   validateSlot,
 } from '../tools';
+import { fail, ToolResponse } from '../tools/toolResponse';
 
 const router = createRouter();
 
@@ -68,7 +69,7 @@ type ToolHandler = (
   callId: string,
   parameters: any,
   callerNumber?: string
-) => Promise<string>;
+) => Promise<ToolResponse>;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
   checkAvailability: (clinicId, callId, parameters) =>
@@ -235,15 +236,18 @@ async function processToolCalls(message: any, tenant: Awaited<ReturnType<typeof 
     const name = toolCall.function.name;
     const handler = TOOL_HANDLERS[name];
     const parameterSchema = VAPI_TOOL_PARAMETER_SCHEMAS[name];
-    let result: string;
+    let response: ToolResponse;
 
     if (!handler || !parameterSchema) {
-      result = 'I could not process that request. Apologise and offer to have clinic staff call back.';
+      response = fail(
+        'UNKNOWN_TOOL',
+        'This request could not be processed. Apologise to the patient in their current language and offer a clinic staff callback.'
+      );
     } else {
       try {
         const rawParameters = safeParseArguments(toolCall.function.arguments);
         const parameters = parameterSchema.parse(rawParameters);
-        result = await handler(
+        response = await handler(
           tenant.clinicId,
           tenant.callId,
           parameters,
@@ -258,13 +262,24 @@ async function processToolCalls(message: any, tenant: Awaited<ReturnType<typeof 
             message: error instanceof Error ? error.message : String(error),
           });
         }
-        result = invalidInput
-          ? 'The request details were incomplete or invalid. Ask the patient to repeat the required details.'
-          : 'Something went wrong. Apologise and tell the patient a team member will call them back.';
+        response = invalidInput
+          ? fail(
+              'INVALID_REQUEST',
+              'The request details were incomplete or invalid. Ask the patient, in their current language, to repeat the required details.'
+            )
+          : fail(
+              'INTERNAL_ERROR',
+              'Something went wrong on our side. Apologise to the patient in their current language and tell them a team member will call them back.'
+            );
       }
     }
 
-    results.push({ toolCallId: toolCall.id, result });
+    // Vapi's tool-call result field must be a single-line string, not a raw
+    // JSON object — so the structured, language-neutral response is
+    // serialized here. The model on the other end reads this JSON and, per
+    // the system prompt, speaks the underlying facts naturally in whatever
+    // language the caller is currently using.
+    results.push({ toolCallId: toolCall.id, result: JSON.stringify(response) });
   }
 
   return { results };
@@ -272,10 +287,14 @@ async function processToolCalls(message: any, tenant: Awaited<ReturnType<typeof 
 
 function accessDeniedToolResponse(message: any) {
   const toolCalls = z.array(toolCallSchema).min(1).max(20).parse(message.toolCallList);
+  const response = fail(
+    'SERVICE_UNAVAILABLE',
+    'This clinic service is temporarily unavailable. Apologise to the patient in their current language, do not perform the requested action, and end the call.'
+  );
   return {
     results: toolCalls.map(toolCall => ({
       toolCallId: toolCall.id,
-      result: 'This clinic service is temporarily unavailable. Apologise, do not perform the requested action, and end the call.',
+      result: JSON.stringify(response),
     })),
   };
 }

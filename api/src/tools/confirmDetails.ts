@@ -3,7 +3,7 @@ import {
   setConfirmedDetails,
   TenantCallScope,
 } from './state';
-import { toReadableTime, toReadableDate } from './helpers';
+import { fail, ok, ToolResponse } from './toolResponse';
 import { prisma } from '../lib/prisma';
 import { toE164 } from '../lib/phone';
 
@@ -20,12 +20,15 @@ export async function confirmDetails(
   callId: string,
   parameters: ConfirmDetailsParameters,
   callerNumber?: string
-): Promise<string> {
+): Promise<ToolResponse> {
   const scope: TenantCallScope = { clinicId, callId };
 
   const { date, time } = parameters;
   if (typeof date !== 'string' || typeof time !== 'string') {
-    return 'The appointment date or time is missing. Ask the patient to choose an available date and time first.';
+    return fail(
+      'DATE_OR_TIME_MISSING',
+      'The appointment date or time is missing. Ask the patient, in their current language, to choose an available date and time first.'
+    );
   }
 
   const reason = typeof parameters.reason === 'string' && parameters.reason.trim()
@@ -40,7 +43,10 @@ export async function confirmDetails(
       'Unable to read call name:',
       error instanceof Error ? error.message : 'unknown Redis error'
     );
-    return 'I could not safely retrieve the booking details. Apologise and tell the patient a team member will call them back.';
+    return fail(
+      'STATE_UNAVAILABLE',
+      'The booking details could not be safely retrieved. Apologise to the patient in their current language and tell them a team member will call them back.'
+    );
   }
 
   const suppliedName = typeof parameters.patientName === 'string'
@@ -52,7 +58,10 @@ export async function confirmDetails(
   // If provider signalling has no customer number, fail closed and arrange a
   // staff callback instead of booking or messaging an arbitrary third party.
   if (!callerNumber) {
-    return 'The caller phone number could not be verified from the call. Do not book or send messages; offer a clinic callback.';
+    return fail(
+      'CALLER_NUMBER_UNVERIFIED',
+      'The caller phone number could not be verified from the call. Do not book or send messages. Apologise in the patient\'s current language and offer a clinic callback.'
+    );
   }
   const rawPhone = callerNumber;
   let normalizedPhone = '';
@@ -69,7 +78,10 @@ export async function confirmDetails(
   const last4 = cleanPhone.slice(-4);
 
   if (!/^\d{7,15}$/.test(cleanPhone) || !/^\d{4}$/.test(last4)) {
-    return 'A complete phone number is required. Ask the patient to say the full number clearly, one more time only.';
+    return fail(
+      'PHONE_INCOMPLETE',
+      'A complete phone number could not be resolved. Ask the patient, in their current language, to say the full number clearly one more time only.'
+    );
   }
 
   try {
@@ -85,12 +97,15 @@ export async function confirmDetails(
       'Unable to persist confirmed call details:',
       error instanceof Error ? error.message : 'unknown Redis error'
     );
-    return 'I could not safely retain the confirmed booking details. Apologise and tell the patient a team member will call them back.';
+    return fail(
+      'STATE_PERSIST_FAILED',
+      'The confirmed booking details could not be safely retained. Apologise to the patient in their current language and tell them a team member will call them back.'
+    );
   }
 
-  const [h, m] = time.split(':').map(Number);
-  const readableTime = toReadableTime(h, m);
-  const readableDate = toReadableDate(date);
-
-  return `Say EXACTLY: "Perfect — ${patientName}, number ending in ${last4}, ${reason} on ${readableDate} at ${readableTime}. Does that sound right?"`;
+  return ok(
+    'CONFIRMATION_READY',
+    'Read these details back to the patient naturally in their current language, then ask them to confirm ("Does that sound right?"). Preserve every fact exactly — do not alter the name, the phone digits, the reason, the date, or the time while translating or rephrasing. Wait for explicit confirmation before calling bookAppointment.',
+    { patientName, phoneLast4: last4, reason, date, time }
+  );
 }

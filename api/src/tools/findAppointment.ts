@@ -1,10 +1,7 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { formatInTimezone } from '../lib/timezone';
-import {
-  CALLER_VERIFICATION_REQUIRED,
-  isVerifiedCallPatient,
-} from './callerVerification';
+import { isoDateAndTime, ok, fail, ToolResponse } from './toolResponse';
+import { callerVerificationRequired, isVerifiedCallPatient } from './callerVerification';
 
 const findAppointmentSchema = z.object({
   patientName: z.string().trim().min(2).max(120),
@@ -20,10 +17,13 @@ export async function findAppointment(
   callId: string,
   parameters: unknown,
   _callerNumber?: string
-): Promise<string> {
+): Promise<ToolResponse> {
   const parsed = findAppointmentSchema.safeParse(parameters);
   if (!parsed.success) {
-    return 'Ask for the full patient name used when the appointment was booked.';
+    return fail(
+      'NAME_REQUIRED',
+      'Ask the patient, in their current language, for the full name used when the appointment was booked.'
+    );
   }
 
   const clinic = await prisma.clinic.findUnique({
@@ -35,7 +35,12 @@ export async function findAppointment(
     },
   });
 
-  if (!clinic) return 'The clinic could not be verified. Offer to have clinic staff call back.';
+  if (!clinic) {
+    return fail(
+      'CLINIC_NOT_FOUND',
+      'The clinic could not be verified. Apologise in the patient\'s current language and offer a clinic staff callback.'
+    );
+  }
   const candidates = await prisma.patient.findMany({
     where: {
       organizationId: clinic.organizationId,
@@ -54,7 +59,7 @@ export async function findAppointment(
 
   // Use the same response for a wrong name and a wrong number so this tool
   // cannot be used to enumerate whether somebody is a patient at the clinic.
-  if (verifiedPatientIds.length === 0) return CALLER_VERIFICATION_REQUIRED;
+  if (verifiedPatientIds.length === 0) return callerVerificationRequired();
 
   const appointments = await prisma.appointment.findMany({
     where: {
@@ -69,27 +74,33 @@ export async function findAppointment(
   });
 
   if (appointments.length === 0) {
-    return 'The caller is verified, but no upcoming appointment was found at this clinic.';
-  }
-
-  if (appointments.length === 1) {
-    const appointment = appointments[0];
-    const { readableDate, readableTime } = formatInTimezone(
-      appointment.startAt,
-      clinic.timezone
+    return fail(
+      'NO_APPOINTMENT_FOUND',
+      'The caller is verified, but no upcoming appointment was found at this clinic. Tell the patient this, in their current language, and ask how you can help.'
     );
-    return `Found 1 verified appointment. appointmentId="${appointment.id}". Say: "I found a ${appointment.reason} on ${readableDate} at ${readableTime} — is that the one?" If yes, use appointmentId="${appointment.id}" for the next step.`;
   }
 
-  const list = appointments
-    .map(appointment => {
-      const { readableDate, readableTime } = formatInTimezone(
-        appointment.startAt,
-        clinic.timezone
-      );
-      return `appointmentId="${appointment.id}" — ${appointment.reason} on ${readableDate} at ${readableTime}`;
-    })
-    .join('. ');
+  const appointmentList = appointments.map(appointment => {
+    const { date, time } = isoDateAndTime(appointment.startAt, clinic.timezone);
+    return {
+      appointmentId: appointment.id,
+      reason: appointment.reason,
+      date,
+      time,
+    };
+  });
 
-  return `Found ${appointments.length} verified appointments: ${list}. Ask which one and use the correct appointmentId.`;
+  if (appointmentList.length === 1) {
+    return ok(
+      'APPOINTMENT_FOUND',
+      'Describe this appointment (data.appointments[0]) naturally in the patient\'s current language and ask "is that the one?". If confirmed, use appointmentId=data.appointments[0].appointmentId for the next step.',
+      { count: 1, appointments: appointmentList }
+    );
+  }
+
+  return ok(
+    'APPOINTMENTS_FOUND',
+    'List data.appointments naturally in the patient\'s current language, ask which one they mean, and use the matching appointmentId for the next step.',
+    { count: appointmentList.length, appointments: appointmentList }
+  );
 }

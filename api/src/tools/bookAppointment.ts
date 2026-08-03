@@ -1,26 +1,30 @@
 import { prisma } from '../lib/prisma';
-import { formatInTimezone } from '../lib/timezone';
 import {
   AppointmentCommandError,
   createAppointmentCommand,
 } from '../services/appointmentCommands';
 import { clearCallState, getConfirmedDetails, getPatientName } from './state';
+import { fail, firstNameOf, isoDateAndTime, ok, ToolResponse } from './toolResponse';
 
 interface BookAppointmentParameters {
   doctorId?: string | null;
 }
-//x
 
 export async function bookAppointment(
   clinicId: string,
   callId: string,
   parameters: BookAppointmentParameters
-): Promise<string> {
+): Promise<ToolResponse> {
   const clinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
     select: { organizationId: true, timezone: true },
   });
-  if (!clinic) return 'The clinic could not be verified. Offer to have clinic staff call back.';
+  if (!clinic) {
+    return fail(
+      'CLINIC_NOT_FOUND',
+      'The clinic could not be verified. Apologise in the patient\'s current language and offer a clinic staff callback.'
+    );
+  }
 
   const operationIdempotencyKey = `call:${callId}`;
   const fullIdempotencyKey = `voice:appointment:create:${clinic.organizationId}:${operationIdempotencyKey}`;
@@ -29,9 +33,13 @@ export async function bookAppointment(
     include: { patient: { select: { name: true } } },
   });
   if (previous) {
-    const { readableTime } = formatInTimezone(previous.startAt, clinic.timezone);
-    const firstName = previous.patient.name.trim().split(/\s+/)[0] || 'there';
-    return `Already booked. Say EXACTLY: "You are all set, ${firstName}. See you at ${readableTime} — we will send a reminder. Is there anything else I can help you with today?"`;
+    const { date, time } = isoDateAndTime(previous.startAt, clinic.timezone);
+    const patientFirstName = firstNameOf(previous.patient.name);
+    return ok(
+      'ALREADY_BOOKED',
+      'This appointment is already booked. Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that they are all set and will see the doctor on data.date at data.time, and that a reminder will be sent. Then ask if there is anything else you can help with.',
+      { date, time, patientFirstName }
+    );
   }
 
   const [confirmed, storedName] = await Promise.all([
@@ -39,7 +47,10 @@ export async function bookAppointment(
     getPatientName({ clinicId, callId }),
   ]);
   if (!confirmed) {
-    return 'The confirmed booking details have expired or are missing. Do not book. Apologise and tell the patient a team member will call them back.';
+    return fail(
+      'CONFIRMATION_EXPIRED',
+      'The confirmed booking details have expired or are missing. Do not book. Apologise to the patient in their current language and tell them a team member will call them back.'
+    );
   }
 
   try {
@@ -57,19 +68,33 @@ export async function bookAppointment(
     });
     await clearCallState(clinicId, callId);
 
-    const { readableTime } = formatInTimezone(result.appointment.startAt, clinic.timezone);
-    const firstName = (storedName ?? confirmed.patientName).trim().split(/\s+/)[0] || 'there';
-    return `Booked. Say EXACTLY: "You are all set, ${firstName}. See you at ${readableTime} — we will send a reminder. Is there anything else I can help you with today?" If no or bye say "Take care, have a great day" and end the call.`;
+    const { date, time } = isoDateAndTime(result.appointment.startAt, clinic.timezone);
+    const patientFirstName = firstNameOf(storedName ?? confirmed.patientName);
+
+    return ok(
+      'BOOKED',
+      'The appointment is booked. Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that they are all set and will see the doctor on data.date at data.time, and that a reminder will be sent. Then ask if there is anything else you can help with. If they say no or goodbye, say a warm closing (e.g. "take care, have a great day") and end the call in the same turn.',
+      { date, time, patientFirstName }
+    );
   } catch (error) {
     if (error instanceof AppointmentCommandError) {
       if (error.code === 'slot_unavailable') {
-        return 'That slot was just taken. Do not book it. Apologise and ask the patient to choose another available time.';
+        return fail(
+          'SLOT_TAKEN',
+          'That slot was just taken by another booking. Do not book it. Apologise to the patient in their current language and ask them to choose another available time.'
+        );
       }
       if (error.code === 'organization_inactive' || error.code === 'commercial_access') {
-        return 'Automatic booking is temporarily unavailable. Apologise and offer a clinic staff callback.';
+        return fail(
+          'BOOKING_UNAVAILABLE',
+          'Automatic booking is temporarily unavailable. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
       if (error.code === 'invalid_input') {
-        return 'The confirmed appointment date or time is invalid. Ask the patient to choose an available future slot.';
+        return fail(
+          'INVALID_DATE_TIME',
+          'The confirmed appointment date or time is invalid. Ask the patient, in their current language, to choose an available future slot.'
+        );
       }
     }
     throw error;

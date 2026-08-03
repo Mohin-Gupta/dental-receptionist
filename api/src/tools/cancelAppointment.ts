@@ -1,14 +1,11 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { formatInTimezone } from '../lib/timezone';
 import {
   AppointmentCommandError,
   cancelAppointmentCommand,
 } from '../services/appointmentCommands';
-import {
-  CALLER_VERIFICATION_REQUIRED,
-  isVerifiedCallPatient,
-} from './callerVerification';
+import { callerVerificationRequired, isVerifiedCallPatient } from './callerVerification';
+import { fail, firstNameOf, isoDateAndTime, ok, ToolResponse } from './toolResponse';
 
 const cancelAppointmentSchema = z.object({
   appointmentId: z.string().trim().uuid(),
@@ -24,10 +21,13 @@ export async function cancelAppointment(
   callId: string,
   parameters: unknown,
   callerNumber?: string
-): Promise<string> {
+): Promise<ToolResponse> {
   const parsed = cancelAppointmentSchema.safeParse(parameters);
   if (!parsed.success) {
-    return 'No valid appointment ID was provided. Ask the patient to choose a verified appointment first.';
+    return fail(
+      'INVALID_APPOINTMENT_ID',
+      'No valid appointment ID was provided. Ask the patient, in their current language, to choose a verified appointment first.'
+    );
   }
 
   const appointment = await prisma.appointment.findFirst({
@@ -51,14 +51,11 @@ export async function cancelAppointment(
     appointment.organizationId !== appointment.clinic.organizationId ||
     !(await isVerifiedCallPatient(clinicId, callId, appointment.patientId))
   ) {
-    return CALLER_VERIFICATION_REQUIRED;
+    return callerVerificationRequired();
   }
 
-  const { readableDate, readableTime } = formatInTimezone(
-    appointment.startAt,
-    appointment.clinic.timezone
-  );
-  const firstName = appointment.patient.name.trim().split(/\s+/)[0] || 'there';
+  const { date, time } = isoDateAndTime(appointment.startAt, appointment.clinic.timezone);
+  const patientFirstName = firstNameOf(appointment.patient.name);
 
   try {
     const result = await cancelAppointmentCommand({
@@ -67,16 +64,30 @@ export async function cancelAppointment(
       appointmentId: appointment.id,
     });
     if (result.duplicate) {
-      return `Already cancelled. Say: "That appointment on ${readableDate} at ${readableTime} is already cancelled, ${firstName}."`;
+      return ok(
+        'ALREADY_CANCELLED',
+        'This appointment is already cancelled. Tell the patient, in their current language and using their first name (data.patientFirstName), that the appointment on data.date at data.time is already cancelled.',
+        { date, time, patientFirstName }
+      );
     }
-    return `Cancelled. Say EXACTLY: "Done — your appointment on ${readableDate} at ${readableTime} has been cancelled, ${firstName}. Hope to see you again soon. Take care." Then end the call.`;
+    return ok(
+      'CANCELLED',
+      'The appointment is cancelled. Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that the appointment on data.date at data.time has been cancelled, and that you hope to see them again soon. Then say a warm goodbye and end the call in the same turn.',
+      { date, time, patientFirstName }
+    );
   } catch (error) {
     if (error instanceof AppointmentCommandError) {
       if (error.code === 'not_active') {
-        return 'That verified appointment can no longer be cancelled automatically. Offer to have clinic staff call back.';
+        return fail(
+          'CANNOT_CANCEL_AUTOMATICALLY',
+          'That verified appointment can no longer be cancelled automatically. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
       if (error.code === 'concurrent_change') {
-        return 'That appointment changed while I was processing it. Do not make another change; offer to have clinic staff call back.';
+        return fail(
+          'CONCURRENT_CHANGE',
+          'That appointment changed while this was being processed. Do not attempt another change. Apologise in the patient\'s current language and offer a clinic staff callback.'
+        );
       }
     }
     throw error;

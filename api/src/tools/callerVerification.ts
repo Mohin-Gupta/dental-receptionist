@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { phonesMatch } from '../lib/phone';
 import { sendSMS } from '../services/twilio';
+import { fail, ok, ToolResponse } from './toolResponse';
 import {
   clearCallerVerification,
   consumeCallerVerificationCode,
@@ -19,8 +20,17 @@ const verifySchema = z.object({
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
-export const CALLER_VERIFICATION_REQUIRED =
-  'Strong verification is required before revealing or changing an appointment. Use requestCallerVerification to send a one-time code to the patient number on file, then use verifyCallerCode. If verification is unavailable, offer a clinic callback.';
+/**
+ * Deliberately identical for every failure cause (missing patient, ambiguous
+ * name, wrong caller, expired code, etc.) so this response can never be used
+ * as an enumeration oracle for whether someone is a patient at the clinic.
+ */
+export function callerVerificationRequired(): ToolResponse {
+  return fail(
+    'CALLER_VERIFICATION_REQUIRED',
+    'Strong verification is required before revealing or changing an appointment. Tell the patient, in their current language, that you need to verify their identity first. Use requestCallerVerification to send a one-time code to the patient number on file, then use verifyCallerCode. If verification is unavailable, offer a clinic callback.'
+  );
+}
 
 function verificationSecret(): string {
   const secret = process.env.CALLER_VERIFICATION_HMAC_SECRET;
@@ -42,14 +52,14 @@ export async function requestCallerVerification(
   callId: string,
   parameters: unknown,
   callerNumber?: string
-): Promise<string> {
+): Promise<ToolResponse> {
   const parsed = requestSchema.safeParse(parameters);
-  if (!parsed.success || !callerNumber) return CALLER_VERIFICATION_REQUIRED;
+  if (!parsed.success || !callerNumber) return callerVerificationRequired();
   const clinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
     select: { organizationId: true, defaultCallingCode: true },
   });
-  if (!clinic) return CALLER_VERIFICATION_REQUIRED;
+  if (!clinic) return callerVerificationRequired();
 
   const candidates = await prisma.patient.findMany({
     where: {
@@ -71,7 +81,7 @@ export async function requestCallerVerification(
   );
   // Ambiguous names/numbers and missing patients deliberately share the same
   // response; do not create an enumeration or OTP-spam endpoint.
-  if (matching.length !== 1) return CALLER_VERIFICATION_REQUIRED;
+  if (matching.length !== 1) return callerVerificationRequired();
   const patient = matching[0];
   const scope = { clinicId, callId };
   const existing = await getCallerVerification(scope);
@@ -80,8 +90,8 @@ export async function requestCallerVerification(
     new Date(existing.expiresAt).getTime() > Date.now()
   ) {
     return existing.verifiedAt
-      ? 'The caller is already strongly verified for this patient.'
-      : 'A verification code was already sent to the patient number on file. Ask for that six-digit code.';
+      ? ok('ALREADY_VERIFIED', 'The caller is already strongly verified for this patient. Continue with the requested action.')
+      : ok('CODE_ALREADY_SENT', 'A verification code was already sent to the patient number on file. Ask the caller, in their current language, for that six-digit code.');
   }
 
   const code = String(crypto.randomInt(100_000, 1_000_000));
@@ -108,33 +118,55 @@ export async function requestCallerVerification(
     );
   } catch {
     await clearCallerVerification(scope).catch(() => undefined);
-    return 'Verification could not be delivered. Do not reveal or change appointment details; offer a clinic callback.';
+    return fail(
+      'VERIFICATION_DELIVERY_FAILED',
+      'Verification could not be delivered. Do not reveal or change appointment details. Apologise to the patient in their current language and offer a clinic callback.'
+    );
   }
-  return 'A six-digit verification code was sent to the patient number on file. Ask the caller to read it back, then use verifyCallerCode.';
+  return ok(
+    'CODE_SENT',
+    'A six-digit verification code was sent to the patient number on file. Ask the caller, in their current language, to read the code back, then use verifyCallerCode.'
+  );
 }
 
 export async function verifyCallerCode(
   clinicId: string,
   callId: string,
   parameters: unknown
-): Promise<string> {
+): Promise<ToolResponse> {
   const parsed = verifySchema.safeParse(parameters);
-  if (!parsed.success) return 'Ask for the complete six-digit verification code.';
+  if (!parsed.success) {
+    return fail('CODE_INCOMPLETE', 'Ask the caller, in their current language, for the complete six-digit verification code.');
+  }
   const scope = { clinicId, callId };
   const state = await getCallerVerification(scope);
   if (!state) {
-    return 'Verification is unavailable or expired. Do not reveal or change appointment details; offer a clinic callback.';
+    return fail(
+      'VERIFICATION_EXPIRED',
+      'Verification is unavailable or expired. Do not reveal or change appointment details. Offer a clinic callback.'
+    );
   }
   const supplied = codeDigest(clinicId, callId, state.patientId, parsed.data.code);
   const result = await consumeCallerVerificationCode(scope, supplied, MAX_ATTEMPTS);
   if (result === 'verified') {
-    return 'The caller is strongly verified. You may now use findAppointment, cancelAppointment, or rescheduleAppointment for this patient.';
+    return ok(
+      'VERIFIED',
+      'The caller is strongly verified. You may now use findAppointment, cancelAppointment, or rescheduleAppointment for this patient.'
+    );
   }
-  if (result === 'invalid') return 'That code is not valid. Ask the caller to try again.';
+  if (result === 'invalid') {
+    return fail('CODE_INVALID', 'That code is not valid. Ask the caller, in their current language, to try again.');
+  }
   if (result === 'locked') {
-    return 'Verification failed too many times. Do not reveal or change appointment details; offer a clinic callback.';
+    return fail(
+      'VERIFICATION_LOCKED',
+      'Verification failed too many times. Do not reveal or change appointment details. Offer a clinic callback.'
+    );
   }
-  return 'Verification is unavailable or expired. Do not reveal or change appointment details; offer a clinic callback.';
+  return fail(
+    'VERIFICATION_EXPIRED',
+    'Verification is unavailable or expired. Do not reveal or change appointment details. Offer a clinic callback.'
+  );
 }
 
 export async function isVerifiedCallPatient(

@@ -1,8 +1,9 @@
 import { getAvailableSlots } from '../services/googleCalendar';
 import { getSlotState, setSlotState } from './state';
-import { normalizeTime, toReadableTime } from './helpers';
+import { normalizeTime } from './helpers';
 import { prisma } from '../lib/prisma';
 import { resolveDoctorForClinic } from '../services/doctors';
+import { fail, ok, ToolResponse } from './toolResponse';
 
 interface ValidateSlotParameters {
   date: string;
@@ -14,7 +15,7 @@ export async function validateSlot(
   clinicId: string,
   callId: string,
   parameters: ValidateSlotParameters
-): Promise<string> {
+): Promise<ToolResponse> {
   const { date, time } = parameters;
   const normalized = normalizeTime(time);
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
@@ -52,26 +53,34 @@ export async function validateSlot(
   }
 
   const isAvailable = allSlots.some(s => s.start === normalized);
-  const [h, m] = normalized.split(':').map(Number);
-  const readableTime = toReadableTime(h, m);
 
   if (isAvailable) {
-    return `${readableTime} is available. Confirm with patient then proceed. Use time="${normalized}" for booking.`;
+    return ok(
+      'SLOT_AVAILABLE',
+      'This time is available. Confirm it back to the patient naturally in their current language, then proceed using time=data.time for the next step.',
+      { date, time: normalized }
+    );
   }
 
+  const [h, m] = normalized.split(':').map(Number);
   const requestedMins = h * 60 + m;
   const nearby = allSlots
     .map(s => {
       const [sh, sm] = s.start.split(':').map(Number);
-      return { ...s, diff: Math.abs(sh * 60 + sm - requestedMins) };
+      return { start: s.start, diff: Math.abs(sh * 60 + sm - requestedMins) };
     })
     .filter(s => s.diff > 0 && s.diff <= 90)
     .sort((a, b) => a.diff - b.diff)
-    .slice(0, 2);
+    .slice(0, 2)
+    .map(s => ({ start: s.start }));
 
-  const suggestions = nearby.length > 0
-    ? nearby.map(s => s.label).join(' or ')
-    : allSlots.slice(0, 2).map(s => s.label).join(' or ');
+  const nearestSlots = nearby.length > 0
+    ? nearby
+    : allSlots.slice(0, 2).map(s => ({ start: s.start }));
 
-  return `${readableTime} is not available. Nearest: ${suggestions}. Ask which works.`;
+  return fail(
+    'SLOT_UNAVAILABLE',
+    'This exact time is not available. Offer the alternatives in data.nearestSlots naturally in the patient\'s current language and ask which works. Do not invent other times.',
+    { date, requestedTime: normalized, nearestSlots }
+  );
 }
