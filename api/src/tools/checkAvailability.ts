@@ -79,12 +79,46 @@ export async function checkAvailability(
   const allSlots = slots.map(s => ({ start: s.start }));
   const firstFour = allSlots.slice(0, 4);
 
+  // Buckets exist so the assistant can say "we have morning and evening
+  // openings" in one short sentence instead of reading out every slot. The
+  // full time list per period is still included so that once the caller
+  // picks a period, the assistant can read a few real times from it without
+  // another tool round-trip.
+  const periodOf = (start: string): 'morning' | 'afternoon' | 'evening' => {
+    const hour = Number(start.split(':')[0]);
+    if (hour < 12) return 'morning';
+    if (hour < 17) return 'afternoon';
+    return 'evening';
+  };
+  const periods = {
+    morning: allSlots.filter(s => periodOf(s.start) === 'morning'),
+    afternoon: allSlots.filter(s => periodOf(s.start) === 'afternoon'),
+    evening: allSlots.filter(s => periodOf(s.start) === 'evening'),
+  };
+  const periodsAvailable = (['morning', 'afternoon', 'evening'] as const).filter(
+    p => periods[p].length > 0
+  );
+
+  // Asking "which period works for you?" only makes sense when there is an
+  // actual choice between periods. If everything open that day fits in one
+  // period, or there are only a handful of slots total, offering a period
+  // choice is confusing overhead — just read the real times directly.
+  const offerMode: 'direct' | 'choose_period' =
+    allSlots.length <= 4 || periodsAvailable.length <= 1 ? 'direct' : 'choose_period';
+
+  const say = offerMode === 'direct'
+    ? 'There is no meaningful period choice today — either very few slots exist, or they are all in one part of the day. Do NOT ask the patient to choose a period. Instead read the actual times directly and naturally from data.allSlots (all of them if 4 or fewer; otherwise the first 3-4), in the caller\'s current language, spoken as times, and ask if one works. Never invent times not present in data.'
+    : 'Do NOT read out every slot. Instead, in one short sentence, tell the patient which periods have openings — using data.periodsAvailable (a subset of morning/afternoon/evening) — and ask which suits them. Once they name a period (or ask for a specific time directly), read 3-4 real times from data.periods.<chosen period> naturally, spoken as times. If the patient asks for a specific time right away instead of a period, skip the summary and use validateSlot directly. Never invent times not present in data.';
+
   return ok(
     'SLOTS_AVAILABLE',
-    'Read the first 4 times in data.firstFour naturally to the patient in their current language (speak them as times, do not read raw 24-hour digits literally). If data.hasMore is true, mention more times are available later in the day without listing them yet. Wait for the patient to choose, then use validateSlot to confirm a specific time before proceeding.',
+    say,
     {
       date: parameters.date,
       totalSlots: allSlots.length,
+      offerMode,
+      periods,
+      periodsAvailable,
       firstFour,
       hasMore: allSlots.length > 4,
       allSlots,
