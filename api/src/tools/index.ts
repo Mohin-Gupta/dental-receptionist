@@ -1,4 +1,5 @@
 export { checkAvailability } from './checkAvailability';
+export { findDoctors } from './findDoctors';
 export { validateSlot } from './validateSlot';
 export { storeName } from './storeName';
 export { confirmDetails } from './confirmDetails';

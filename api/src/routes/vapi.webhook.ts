@@ -40,6 +40,7 @@ import {
   checkAvailability,
   confirmDetails,
   findAppointment,
+  findDoctors,
   rescheduleAppointment,
   storeName,
   validateSlot,
@@ -74,6 +75,8 @@ type ToolHandler = (
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
   checkAvailability: (clinicId, callId, parameters) =>
     checkAvailability(clinicId, callId, parameters),
+  findDoctors: (clinicId, callId, parameters) =>
+    findDoctors(clinicId, callId, parameters),
   validateSlot: (clinicId, callId, parameters) =>
     validateSlot(clinicId, callId, parameters),
   storeName: (clinicId, callId, parameters) => storeName(clinicId, callId, parameters),

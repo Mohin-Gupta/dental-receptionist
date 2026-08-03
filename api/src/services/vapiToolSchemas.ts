@@ -8,6 +8,12 @@ const doctorIdSchema = z.preprocess(
 
 export const VAPI_TOOL_PARAMETER_SCHEMAS: Record<string, z.ZodTypeAny> = {
   checkAvailability: z.object({ date: dateSchema, doctorId: doctorIdSchema }).strict(),
+  findDoctors: z.object({
+    reason: z.preprocess(
+      value => (value === '' || value === null ? undefined : value),
+      z.string().trim().max(200).optional()
+    ),
+  }).strict(),
   validateSlot: z.object({
     date: dateSchema,
     time: z.string().trim().min(1).max(20),
