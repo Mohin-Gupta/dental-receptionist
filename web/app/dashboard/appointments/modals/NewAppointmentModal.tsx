@@ -12,10 +12,17 @@ import api, {
 } from '@/lib/api';
 
 import {
+  CalendarDays,
+  CircleAlert,
+  Clock3,
+  Info,
   X,
   Loader2,
   Plus,
+  Stethoscope,
+  UserRound,
 } from 'lucide-react';
+import useModalBehavior from './useModalBehavior';
 
 
 interface NewAppointmentModalProps {
@@ -43,6 +50,8 @@ export default function NewAppointmentModal({ onClose, onSuccess }: NewAppointme
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalBehavior(onClose, firstFieldRef);
 
   // Computed once per mount via useMemo, not directly during render — avoids
   // calling the impure Date.now()/new Date() during the render pass itself.
@@ -142,160 +151,225 @@ const { minDate, maxDate } = dateLimits;
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-6">
+    <div className="modal-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="modal-panel max-w-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-appointment-title"
+        aria-describedby="new-appointment-description"
+        tabIndex={-1}
+      >
+        <header className="modal-header">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
-              <Plus className="w-4 h-4 text-blue-400" />
-            </div>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand">
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </span>
             <div>
-              <h3 className="text-sm font-semibold text-white">New Appointment</h3>
-              <p className="text-xs text-gray-400">Book manually — same flow as a phone booking</p>
+              <p className="section-kicker mb-1">Manual booking</p>
+              <h2 id="new-appointment-title" className="section-title">New appointment</h2>
+              <p id="new-appointment-description" className="section-description mt-0.5">Book manually — same flow as a phone booking</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
-            <X className="w-5 h-5" />
+          <button type="button" onClick={onClose} className="icon-button" aria-label="Close new appointment dialog">
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
-        </div>
+        </header>
 
-        <div className="space-y-4 mb-5">
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Patient name</label>
-            <input
-              type="text"
-              value={patientName}
-              onChange={e => setPatientName(e.target.value)}
-              placeholder="e.g. Mohan Gupta"
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+        <div className="space-y-4 p-4 sm:p-5">
+          <section className="surface-card-soft p-4">
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand-dark">
+                <UserRound className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-ink">Patient details</h3>
+                <p className="mt-0.5 text-[0.68rem] text-muted">Who is this appointment for?</p>
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="appointment-patient-name" className="ui-label">Patient name</label>
+                <input
+                  ref={firstFieldRef}
+                  id="appointment-patient-name"
+                  type="text"
+                  value={patientName}
+                  onChange={e => setPatientName(e.target.value)}
+                  placeholder="e.g. Mohan Gupta"
+                  className="ui-input"
+                />
+              </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Phone number</label>
-            <input
-              type="tel"
-              value={patientPhone}
-              onChange={e => setPatientPhone(e.target.value)}
-              placeholder="e.g. 9876543210"
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              If this number already has a patient record, their name will be updated to match.
-            </p>
-          </div>
+              <div>
+                <label htmlFor="appointment-patient-phone" className="ui-label">Phone number</label>
+                <input
+                  id="appointment-patient-phone"
+                  type="tel"
+                  value={patientPhone}
+                  onChange={e => setPatientPhone(e.target.value)}
+                  placeholder="e.g. 9876543210"
+                  className="ui-input"
+                />
+                <p className="ui-help">
+                  If this number already has a patient record, their name will be updated to match.
+                </p>
+              </div>
+            </div>
+          </section>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Reason for visit</label>
-            <input
-              type="text"
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              placeholder="e.g. Teeth cleaning"
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          <section className="surface-card-soft p-4">
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand-dark">
+                <Stethoscope className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-ink">Visit details</h3>
+                <p className="mt-0.5 text-[0.68rem] text-muted">Add the care context and treating doctor.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="appointment-reason" className="ui-label">Reason for visit</label>
+                <input
+                  id="appointment-reason"
+                  type="text"
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                  placeholder="e.g. Teeth cleaning"
+                  className="ui-input"
+                />
+              </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Doctor</label>
-            <select
-              value={selectedDoctorId}
-              onChange={e => setSelectedDoctorId(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {doctors.length === 0 ? (
-                <option value="">No doctors available</option>
-              ) : (
-                doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.id}>
-                    {doctor.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
+              <div>
+                <label htmlFor="appointment-doctor" className="ui-label">Doctor</label>
+                <select
+                  id="appointment-doctor"
+                  value={selectedDoctorId}
+                  onChange={e => setSelectedDoctorId(e.target.value)}
+                  className="ui-select"
+                >
+                  {doctors.length === 0 ? (
+                    <option value="">No doctors available</option>
+                  ) : (
+                    doctors.map((doctor) => (
+                      <option key={doctor.id} value={doctor.id}>
+                        {doctor.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+            </div>
+          </section>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Date</label>
-            <input
-              type="date"
-              value={date}
-              min={minDate}
-              max={maxDate}
-              onChange={e => setDate(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">Bookings are limited to 7 days in advance.</p>
-          </div>
+          <section className="surface-card-soft p-4">
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand-dark">
+                <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-ink">Schedule</h3>
+                <p className="mt-0.5 text-[0.68rem] text-muted">Choose an available date and time.</p>
+              </div>
+            </div>
 
-          {date && (
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Available slots</label>
+            <div className="max-w-xs">
+              <label htmlFor="appointment-date" className="ui-label">Date</label>
+              <input
+                id="appointment-date"
+                type="date"
+                value={date}
+                min={minDate}
+                max={maxDate}
+                onChange={e => setDate(e.target.value)}
+                className="ui-input"
+              />
+              <p className="ui-help">Bookings are limited to 7 days in advance.</p>
+            </div>
 
-              {slotsLoading ? (
-                <div className="flex items-center gap-2 text-sm text-gray-500 py-3">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Loading slots...
-                </div>
-              ) : slotsError ? (
-                <p className="text-sm text-red-400 py-2">{slotsError}</p>
-              ) : slots.length === 0 ? (
-                <p className="text-sm text-gray-500 py-2">No available slots on this date. Try another day.</p>
-              ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
-                  {slots.map(slot => (
-                    <button
-                      key={slot.start}
-                      onClick={() => setSelectedSlot(slot.start)}
-                      className={`text-xs px-3 py-2 rounded-lg border transition-colors ${
-                        selectedSlot === slot.start
-                          ? 'bg-blue-600 border-blue-500 text-white'
-                          : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
-                      }`}
-                    >
-                      {slot.label}
-                    </button>
-                  ))}
-                </div>
-              )}
+            {date && (
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="ui-label">Available slots</p>
+
+                {slotsLoading ? (
+                  <div className="flex items-center gap-2 py-3 text-xs font-medium text-muted" role="status">
+                    <Loader2 className="h-4 w-4 animate-spin text-brand" aria-hidden="true" /> Loading slots...
+                  </div>
+                ) : slotsError ? (
+                  <div className="alert-error" role="alert">
+                    <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <p>{slotsError}</p>
+                  </div>
+                ) : slots.length === 0 ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-line bg-white px-3 py-3 text-xs text-muted">
+                    <Clock3 className="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+                    No available slots on this date. Try another day.
+                  </div>
+                ) : (
+                  <div className="grid max-h-48 grid-cols-3 gap-2 overflow-y-auto pr-1 sm:grid-cols-4" role="group" aria-label="Available appointment times">
+                    {slots.map(slot => (
+                      <button
+                        type="button"
+                        key={slot.start}
+                        aria-pressed={selectedSlot === slot.start}
+                        onClick={() => setSelectedSlot(slot.start)}
+                        className={`min-h-10 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
+                          selectedSlot === slot.start
+                            ? 'border-brand bg-brand text-white shadow-[0_5px_14px_rgba(19,114,103,0.18)]'
+                            : 'border-line-strong bg-white text-ink-soft hover:border-brand hover:bg-brand-softer hover:text-brand-dark'
+                        }`}
+                      >
+                        {slot.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {error && (
+            <div className="alert-error" role="alert">
+              <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>{error}</p>
             </div>
           )}
-        </div>
 
-        {error && (
-          <div className="mb-4 px-3 py-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <p className="text-xs text-red-400">{error}</p>
+          <div className="alert-info">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>
+              The patient will receive a booking confirmation SMS, a reminder call 1 hour before the
+              appointment, and a feedback SMS 1 hour after — same as a phone booking with Maya.
+            </p>
           </div>
-        )}
-
-        <div className="mb-5 px-3 py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-          <p className="text-xs text-blue-300">
-            The patient will receive a booking confirmation SMS, a reminder call 1 hour before the
-            appointment, and a feedback SMS 1 hour after — same as a phone booking with Maya.
-          </p>
         </div>
 
-        <div className="flex gap-3">
+        <footer className="modal-footer">
           <button
+            type="button"
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 text-sm text-gray-300 border border-gray-700 rounded-lg hover:bg-gray-800 transition-colors"
+            className="btn-secondary flex-1"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={
               submitting ||
               !selectedDoctorId ||
               !selectedSlot
             }
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-primary flex-1"
           >
             {submitting
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Booking...</>
-              : <><Plus className="w-4 h-4" /> Book Appointment</>
+              ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Booking...</>
+              : <><Plus className="h-4 w-4" aria-hidden="true" /> Book Appointment</>
             }
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );

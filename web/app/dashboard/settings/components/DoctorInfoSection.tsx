@@ -5,6 +5,17 @@ import api, { Doctor } from '@/lib/api';
 import Field from './Field';
 import Section from './Section';
 import DoctorAvailabilityEditor from './DoctorAvailabilityEditor';
+import {
+  CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  GraduationCap,
+  Mail,
+  Phone,
+  Plus,
+  Stethoscope,
+} from 'lucide-react';
 
 interface Props {
   doctors: Doctor[];
@@ -94,46 +105,65 @@ export default function DoctorInfoSection({
     };
 
   return (
-    <Section title="Doctors">
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <Section
+      id="doctor-settings"
+      title="Doctors"
+      description="Manage the clinicians Maya can book and their location-specific availability."
+      eyebrow="Care team"
+      icon={Stethoscope}
+    >
+      <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {doctors.length === 0 ? (
-            <p className="text-sm text-gray-500 md:col-span-2">
-              No doctors are assigned to this branch yet.
-            </p>
+            <div className="rounded-xl border border-dashed border-line-strong bg-surface-subtle px-5 py-8 text-center md:col-span-2">
+              <span className="empty-illustration mx-auto h-11 w-11">
+                <Stethoscope className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <p className="mt-3 text-xs font-bold text-ink">No doctors assigned yet</p>
+              <p className="mt-1 text-[0.7rem] text-muted">Add the first clinician for this location below.</p>
+            </div>
           ) : (
             doctors.map((doctor) => (
-              <div
+              <article
                 key={doctor.id}
-                className="rounded-lg border border-gray-800 bg-gray-900/60 p-4"
+                className={`rounded-xl border border-line bg-white p-4 shadow-[0_5px_18px_rgba(19,43,35,0.035)] ${
+                  expandedDoctorId === doctor.id ? 'md:col-span-2' : ''
+                }`}
               >
-                <p className="text-sm font-medium text-white">
-                  {doctor.name}
-                </p>
-
-                <div className="mt-1 space-y-0.5 text-xs text-gray-400">
-                  {doctor.specialty && (
-                    <p>
-                      {doctor.specialty}
-                    </p>
-                  )}
-
-                  {doctor.qualification && (
-                    <p>
-                      {
-                        doctor.qualification
-                      }
-                    </p>
-                  )}
-
-                  {doctor.phone && (
-                    <p>{doctor.phone}</p>
-                  )}
-
-                  {doctor.email && (
-                    <p>{doctor.email}</p>
-                  )}
+                <div className="flex items-start gap-3">
+                  <span className="avatar h-11 w-11 text-sm">{doctor.name.charAt(0).toUpperCase()}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-ink">{doctor.name}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {doctor.specialty && (
+                        <span className="status-pill status-info">{doctor.specialty}</span>
+                      )}
+                      {doctor.qualification && (
+                        <span className="inline-flex items-center gap-1 text-[0.68rem] font-medium text-muted">
+                          <GraduationCap className="h-3.5 w-3.5 text-brand" aria-hidden="true" />
+                          {doctor.qualification}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
+
+                {(doctor.phone || doctor.email) && (
+                  <div className="mt-4 grid gap-2 rounded-xl bg-surface-subtle p-3 text-[0.7rem] font-medium text-ink-soft sm:grid-cols-2">
+                    {doctor.phone && (
+                      <p className="flex items-center gap-2">
+                        <Phone className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
+                        <span className="truncate">{doctor.phone}</span>
+                      </p>
+                    )}
+                    {doctor.email && (
+                      <p className="flex items-center gap-2">
+                        <Mail className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
+                        <span className="truncate">{doctor.email}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {canManage && (
                   <button
@@ -143,11 +173,18 @@ export default function DoctorInfoSection({
                         prev === doctor.id ? null : doctor.id
                       )
                     }
-                    className="mt-3 text-xs text-blue-400 hover:text-blue-300"
+                    className="btn-secondary mt-4 min-h-9 px-3 py-2 text-[0.7rem]"
+                    aria-expanded={expandedDoctorId === doctor.id}
                   >
+                    <CalendarClock className="h-3.5 w-3.5 text-brand" aria-hidden="true" />
                     {expandedDoctorId === doctor.id
                       ? 'Hide availability'
                       : 'Set availability'}
+                    {expandedDoctorId === doctor.id ? (
+                      <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
                   </button>
                 )}
 
@@ -158,14 +195,24 @@ export default function DoctorInfoSection({
                     onClose={() => setExpandedDoctorId(null)}
                   />
                 )}
-              </div>
+              </article>
             ))
           )}
         </div>
 
         {canManage && (
-          <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="surface-card-soft p-4 sm:p-5">
+            <div className="mb-4 flex items-center gap-3 border-b border-line pb-4">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-soft text-brand-dark">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-ink">Add a doctor</h3>
+                <p className="mt-0.5 text-[0.7rem] text-muted">Create a clinician profile for this organization.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field
                 label="Doctor name"
                 value={form.name}
@@ -230,17 +277,19 @@ export default function DoctorInfoSection({
             </div>
 
             {error && (
-              <p className="mt-3 text-xs text-red-400">
-                {error}
-              </p>
+              <div className="alert-error mt-4" role="alert">
+                <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>{error}</p>
+              </div>
             )}
 
             <button
               type="button"
               onClick={createDoctor}
               disabled={saving}
-              className="mt-4 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary mt-4"
             >
+              {!saving && <Plus className="h-4 w-4" aria-hidden="true" />}
               {saving
                 ? 'Saving...'
                 : 'Add Doctor'}

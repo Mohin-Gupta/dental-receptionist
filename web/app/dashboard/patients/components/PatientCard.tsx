@@ -1,6 +1,7 @@
 import { PatientWithStats } from '@/lib/api';
 
 import { format } from 'date-fns';
+import { CalendarClock, Phone, Sparkles } from 'lucide-react';
 
 import {
   getInitial,
@@ -15,22 +16,20 @@ export default function PatientCard({
   patient,
 }: Props) {
   return (
-    <div className="p-4">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center">
-          <span className="text-purple-400 font-semibold">
+    <article className="rounded-[1rem] border border-line bg-white p-4 shadow-[0_6px_22px_rgba(19,43,35,0.045)]">
+      <div className="flex items-center gap-3">
+        <span className="avatar h-11 w-11 text-sm">
             {getInitial(
               patient.name
             )}
-          </span>
-        </div>
+        </span>
 
-        <div>
-          <p className="text-white font-medium">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-ink">
             {patient.name}
           </p>
 
-          <p className="text-xs text-gray-500">
+          <p className="mt-1 text-[0.68rem] font-medium text-muted">
             Since{' '}
             {format(
               new Date(
@@ -42,36 +41,33 @@ export default function PatientCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div>
-          <p className="text-xs text-gray-500 mb-1">
-            Phone
+      <div className="mt-4 grid grid-cols-2 gap-2.5">
+        <div className="rounded-xl bg-surface-subtle p-3">
+          <p className="flex items-center gap-1.5 text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">
+            <Phone className="h-3.5 w-3.5 text-brand" aria-hidden="true" /> Phone
           </p>
-
-          <p className="text-gray-300">
+          <p className="mt-1.5 break-all font-mono text-xs font-medium text-ink-soft">
             {patient.phone}
           </p>
         </div>
 
-        <div>
-          <p className="text-xs text-gray-500 mb-1">
-            Visits
+        <div className="rounded-xl bg-surface-subtle p-3">
+          <p className="flex items-center gap-1.5 text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">
+            <Sparkles className="h-3.5 w-3.5 text-brand" aria-hidden="true" /> Visits
           </p>
-
-          <p className="text-gray-300">
+          <p className="mt-1.5 text-xs font-bold text-ink">
             {
               patient._count
                 .appointments
-            }
+            } total
           </p>
         </div>
 
-        <div className="col-span-2">
-          <p className="text-xs text-gray-500 mb-1">
-            Last Visit
+        <div className="col-span-2 rounded-xl border border-line bg-white p-3">
+          <p className="flex items-center gap-1.5 text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">
+            <CalendarClock className="h-3.5 w-3.5 text-brand" aria-hidden="true" /> Last visit
           </p>
-
-          <p className="text-gray-300">
+          <p className="mt-1.5 text-xs font-semibold text-ink-soft">
             {getLastVisit(
               patient
                 .appointments[0]
@@ -80,6 +76,6 @@ export default function PatientCard({
           </p>
         </div>
       </div>
-    </div>
+    </article>
   );
 }

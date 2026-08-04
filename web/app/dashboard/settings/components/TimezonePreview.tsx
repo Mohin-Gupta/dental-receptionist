@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
 } from 'react';
+import { Clock3 } from 'lucide-react';
 
 interface Props {
   timezone: string;
@@ -58,10 +59,10 @@ export default function TimezonePreview({
   }
 
   return (
-    <p className="text-xs text-gray-500 mt-1.5">
-      Current time in this
-      zone:{' '}
-      <span className="text-gray-300">
+    <p className="mt-2 inline-flex items-center gap-2 rounded-lg bg-brand-softer px-2.5 py-1.5 text-[0.7rem] font-medium text-muted">
+      <Clock3 className="h-3.5 w-3.5 text-brand" aria-hidden="true" />
+      Current time in this zone:{' '}
+      <span className="font-bold text-brand-dark">
         {formatted}
       </span>
     </p>

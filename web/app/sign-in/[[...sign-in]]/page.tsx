@@ -4,7 +4,8 @@ import { FormEvent, useEffect, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Loader2, LogIn, Stethoscope } from 'lucide-react';
+import { Info, KeyRound, Loader2, LockKeyhole, LogIn, ShieldCheck } from 'lucide-react';
+import AuthShell from '@/components/ui/AuthShell';
 import api, { setCsrfToken } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
@@ -67,105 +68,129 @@ export default function SignInPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      <form onSubmit={submit} className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-2xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-            <Stethoscope className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-white">AI Receptionist</h1>
-            <p className="text-sm text-gray-400">Clinic operations portal</p>
-          </div>
-        </div>
-
-        {notice && (
-          <div className="mb-4 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2.5">
-            <p className="text-xs text-emerald-300">{notice}</p>
-          </div>
-        )}
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              autoComplete="email"
-              required
-            />
+    <AuthShell>
+      <section className="surface-card overflow-hidden rounded-[1.45rem] shadow-[var(--shadow-md)]" aria-labelledby="sign-in-title">
+        <div className="p-6 sm:p-8">
+          <div className="flex items-center justify-between gap-4">
+            <span className="inline-flex h-11 w-11 items-center justify-center rounded-[14px] bg-brand-soft text-brand" aria-hidden="true">
+              {mfaRequired ? <KeyRound className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
+            </span>
+            <span className="rounded-full border border-line bg-surface-subtle px-3 py-1.5 text-[0.64rem] font-bold uppercase tracking-[0.14em] text-muted">
+              Secure clinic access
+            </span>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              autoComplete="current-password"
-              required
-            />
+          <div className="mt-6">
+            <p className="text-[0.68rem] font-bold uppercase tracking-[0.16em] text-brand">
+              {mfaRequired ? 'One final check' : 'Welcome back'}
+            </p>
+            <h1 id="sign-in-title" className="font-display mt-2 text-[2.25rem] leading-[1.04] tracking-[-0.045em] text-ink sm:text-[2.55rem]">
+              {mfaRequired ? 'Verify it’s really you.' : 'Your front desk is ready.'}
+            </h1>
+            <p className="mt-3 text-sm leading-6 text-muted">
+              {mfaRequired
+                ? 'Keep your account protected with the second step from your authenticator.'
+                : 'Sign in to manage patient calls, appointments, and your clinic team.'}
+            </p>
           </div>
 
-          {mfaRequired && (
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                {useRecoveryCode ? 'Recovery code' : 'Authenticator code'}
-              </label>
-              <input
-                type="text"
-                inputMode={useRecoveryCode ? 'text' : 'numeric'}
-                value={useRecoveryCode ? recoveryCode : totpCode}
-                onChange={(e) => useRecoveryCode
-                  ? setRecoveryCode(e.target.value)
-                  : setTotpCode(e.target.value)}
-                className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                autoComplete={useRecoveryCode ? 'off' : 'one-time-code'}
-                required={mfaRequired}
-              />
-              <button
-                type="button"
-                onClick={() => setUseRecoveryCode((value) => !value)}
-                className="mt-2 text-xs text-blue-400 hover:text-blue-300"
-              >
-                {useRecoveryCode ? 'Use authenticator code' : 'Use a recovery code'}
-              </button>
+          {notice && (
+            <div className="alert-info mt-5" role="status">
+              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>{notice}</p>
             </div>
           )}
+
+          <form onSubmit={submit} className="mt-7" aria-busy={loading}>
+            <div className="space-y-5">
+              <div>
+                <label htmlFor="sign-in-email" className="ui-label">Work email</label>
+                <input
+                  id="sign-in-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="ui-input"
+                  autoComplete="email"
+                  required
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <label htmlFor="sign-in-password" className="ui-label">Password</label>
+                  <Link href="/forgot-password" className="mb-1.5 text-xs font-semibold text-brand hover:text-brand-dark">
+                    Forgot password?
+                  </Link>
+                </div>
+                <input
+                  id="sign-in-password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="ui-input"
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+
+              {mfaRequired && (
+                <div className="rounded-2xl border border-line bg-brand-softer p-4 sm:p-5">
+                  <div className="mb-4 flex items-center gap-2 text-xs font-semibold text-ink-soft">
+                    <LockKeyhole className="h-4 w-4 text-brand" aria-hidden="true" />
+                    Multi-factor verification
+                  </div>
+                  <label htmlFor="sign-in-mfa-code" className="ui-label">
+                    {useRecoveryCode ? 'Recovery code' : 'Authenticator code'}
+                  </label>
+                  <input
+                    id="sign-in-mfa-code"
+                    type="text"
+                    inputMode={useRecoveryCode ? 'text' : 'numeric'}
+                    value={useRecoveryCode ? recoveryCode : totpCode}
+                    onChange={(e) => useRecoveryCode
+                      ? setRecoveryCode(e.target.value)
+                      : setTotpCode(e.target.value)}
+                    className="ui-input font-mono tracking-[0.16em]"
+                    autoComplete={useRecoveryCode ? 'off' : 'one-time-code'}
+                    required={mfaRequired}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setUseRecoveryCode((value) => !value)}
+                    className="mt-3 text-xs font-semibold text-brand hover:text-brand-dark"
+                  >
+                    {useRecoveryCode ? 'Use authenticator code instead' : 'Use a recovery code instead'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {error && (
+              <div className="alert-error mt-5" role="alert" aria-live="assertive">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>{error}</p>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary mt-6 min-h-12 w-full text-sm"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogIn className="h-4 w-4" aria-hidden="true" />}
+              Sign in
+            </button>
+          </form>
         </div>
 
-        {error && (
-          <div className="mt-4 px-3 py-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <p className="text-xs text-red-400">{error}</p>
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-5 w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
-          Sign in
-        </button>
-
-        <Link href="/forgot-password" className="block text-center text-xs text-blue-400 hover:text-blue-300 mt-4">
-          Forgot password?
-        </Link>
-
-        <div className="mt-5 border-t border-gray-800 pt-5 text-center">
-          <p className="text-xs text-gray-500">Setting up a new clinic organization?</p>
-          <Link
-            href="/register"
-            className="mt-2 inline-flex text-sm font-medium text-blue-400 hover:text-blue-300"
-          >
-            Create an organization
+        <div className="border-t border-line bg-surface-subtle px-6 py-5 text-center sm:px-8">
+          <p className="text-xs leading-5 text-muted">Setting up a new clinic organization?</p>
+          <Link href="/register" className="mt-1.5 inline-flex text-sm font-bold text-brand hover:text-brand-dark">
+            Create your clinic workspace
           </Link>
         </div>
-      </form>
-    </div>
+      </section>
+    </AuthShell>
   );
 }

@@ -1,21 +1,35 @@
 import { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import SectionCard from '@/components/ui/SectionCard';
 
 interface Props {
+  id?: string;
   title: string;
+  description?: string;
+  eyebrow?: string;
+  icon?: LucideIcon;
   children: ReactNode;
 }
 
 export default function Section({
+  id,
   title,
+  description,
+  eyebrow,
+  icon,
   children,
 }: Props) {
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-4 md:p-6">
-      <h2 className="text-sm font-semibold text-white mb-5">
-        {title}
-      </h2>
-
-      {children}
+    <div id={id} className="scroll-mt-24">
+      <SectionCard
+        title={title}
+        description={description}
+        eyebrow={eyebrow}
+        icon={icon}
+        contentClassName="p-4 sm:p-6"
+      >
+        {children}
+      </SectionCard>
     </div>
   );
 }

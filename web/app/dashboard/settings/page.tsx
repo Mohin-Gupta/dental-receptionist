@@ -7,6 +7,8 @@ import OrganizationInfoSection from './components/OrganizationInfoSection';
 import ClinicInfoSection from './components/ClinicInfoSection';
 import DoctorInfoSection from './components/DoctorInfoSection';
 import BusinessHoursSection from './components/BusinessHoursSection';
+import PageHeader from '@/components/ui/PageHeader';
+import { Building2, Clock3, MapPinned, SlidersHorizontal, Stethoscope } from 'lucide-react';
 
 export default function SettingsPage() {
   const {
@@ -26,31 +28,70 @@ export default function SettingsPage() {
 
   if (loading || !form) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      <div className="page-shell" role="status" aria-label="Loading settings">
+        <div className="mb-7 space-y-3">
+          <div className="skeleton h-3 w-28" />
+          <div className="skeleton h-9 w-52" />
+          <div className="skeleton h-3.5 w-full max-w-md" />
+        </div>
+        <div className="space-y-5">
+          {[0, 1, 2].map((section) => (
+            <div key={section} className="surface-card overflow-hidden">
+              <div className="flex items-center gap-3 border-b border-line p-5">
+                <span className="skeleton h-9 w-9 rounded-xl" />
+                <div className="space-y-2">
+                  <div className="skeleton h-3.5 w-32" />
+                  <div className="skeleton h-3 w-56" />
+                </div>
+              </div>
+              <div className="grid gap-4 p-5 md:grid-cols-2">
+                <span className="skeleton h-11 w-full" />
+                <span className="skeleton h-11 w-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <span className="sr-only">Loading settings</span>
       </div>
     );
   }
 
   return (
-    <div className="p-4 md:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">
-            Settings
-          </h1>
+    <div className="page-shell">
+      <PageHeader
+        eyebrow="Clinic configuration"
+        title="Settings"
+        icon={SlidersHorizontal}
+        description="Manage organization, branch, and doctor information."
+        actions={(
+          <SaveButton
+            saving={saving}
+            saved={saved}
+            onClick={handleSave}
+          />
+        )}
+      />
 
-          <p className="text-sm text-gray-400 mt-1">
-            Manage organization, branch, and doctor information
-          </p>
-        </div>
-
-        <SaveButton
-          saving={saving}
-          saved={saved}
-          onClick={handleSave}
-        />
-      </div>
+      <nav className="surface-card mb-5 flex max-w-full items-center gap-1 overflow-x-auto p-1.5" aria-label="Settings sections">
+        {[
+          { href: '#organization-settings', label: 'Organization', icon: Building2 },
+          { href: '#clinic-settings', label: 'Clinic', icon: MapPinned },
+          { href: '#doctor-settings', label: 'Doctors', icon: Stethoscope },
+          { href: '#hours-settings', label: 'Business hours', icon: Clock3 },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <a
+              key={item.href}
+              href={item.href}
+              className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[0.7rem] font-bold text-muted transition-colors hover:bg-brand-softer hover:text-brand-dark"
+            >
+              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+              {item.label}
+            </a>
+          );
+        })}
+      </nav>
 
       <div className="space-y-5">
         <OrganizationInfoSection

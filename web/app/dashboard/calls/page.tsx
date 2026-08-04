@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { Phone } from 'lucide-react';
+import PageHeader from '@/components/ui/PageHeader';
 
 import useCalls from './hooks/useCalls';
 
@@ -30,17 +31,18 @@ export default function CallLogsPage() {
   const totalPages = Math.ceil(total / 20);
 
   return (
-    <div className="p-4 md:p-6 lg:p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">
-          Call Logs
-        </h1>
-
-        <p className="text-sm text-gray-400 mt-1">
-          {total} {activeTab} calls
-          recorded
-        </p>
-      </div>
+    <div className="page-shell">
+      <PageHeader
+        eyebrow="Conversation intelligence"
+        title="Call logs"
+        icon={Phone}
+        description={
+          <>
+            <span className="font-semibold text-ink-soft">{total}</span>{' '}
+            {activeTab} calls recorded for this clinic
+          </>
+        }
+      />
 
       <CallTabs
         activeTab={activeTab}
@@ -51,24 +53,31 @@ export default function CallLogsPage() {
         }}
       />
 
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <section className="surface-card overflow-hidden" aria-label={`${activeTab} call logs`}>
         {loading ? (
-          <div className="flex items-center justify-center h-48">
-            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="space-y-1 p-4 sm:p-5" role="status" aria-label="Loading call logs">
+            {[0, 1, 2, 3].map((row) => (
+              <div key={row} className="flex items-center gap-4 rounded-xl px-2 py-3">
+                <span className="skeleton h-10 w-10 shrink-0 rounded-xl" />
+                <span className="skeleton h-3.5 w-36" />
+                <span className="skeleton ml-auto hidden h-3.5 w-24 sm:block" />
+                <span className="skeleton hidden h-7 w-24 md:block" />
+              </div>
+            ))}
+            <span className="sr-only">Loading call logs</span>
           </div>
         ) : calls.length === 0 ? (
-          <div className="py-20 text-center">
-            <Phone className="w-8 h-8 text-gray-700 mx-auto mb-3" />
-
-            <p className="text-sm text-gray-500">
-              No {activeTab} calls
-              recorded yet
+          <div className="px-5 py-16 text-center sm:py-20">
+            <span className="empty-illustration mx-auto">
+              <Phone className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <h2 className="mt-4 text-sm font-bold text-ink">No {activeTab} calls recorded yet</h2>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs leading-5 text-muted">
+              Calls handled in this direction will appear here with their outcome and transcript.
             </p>
           </div>
         ) : (
           <>
-            {/* Desktop */}
-
             <CallTable
               calls={calls}
               timezone={timezone}
@@ -82,9 +91,7 @@ export default function CallLogsPage() {
               }
             />
 
-            {/* Mobile */}
-
-            <div className="md:hidden divide-y divide-gray-800">
+            <div className="space-y-3 bg-surface-subtle p-3 sm:p-4 xl:hidden">
               {calls.map((call) => (
                 <CallCard
                   key={call.id}
@@ -125,7 +132,7 @@ export default function CallLogsPage() {
             />
           </>
         )}
-      </div>
+      </section>
     </div>
   );
 }

@@ -35,26 +35,29 @@ export default function CallTabs({
   onChange,
 }: Props) {
   return (
-    <div className="flex gap-1 mb-5 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit overflow-x-auto">
+    <div className="segmented-control mb-5" role="tablist" aria-label="Call direction">
       {tabs.map((tab) => {
         const Icon = tab.icon;
 
         return (
           <button
+            type="button"
             key={tab.key}
             title={tab.description}
+            role="tab"
+            aria-selected={activeTab === tab.key}
             onClick={() =>
               onChange(
                 tab.key as DirectionTab
               )
             }
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+            className={`segmented-item ${
               activeTab === tab.key
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                ? 'segmented-item-active'
+                : ''
             }`}
           >
-            <Icon className="w-3.5 h-3.5" />
+            <Icon className="h-3.5 w-3.5" aria-hidden="true" />
             {tab.label}
           </button>
         );

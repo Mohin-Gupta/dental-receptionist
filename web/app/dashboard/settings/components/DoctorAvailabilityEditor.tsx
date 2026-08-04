@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 
 import api, { DoctorAvailability, WeeklyHours } from '@/lib/api';
+import {
+  CalendarClock,
+  CheckCircle2,
+  CircleAlert,
+  Clock3,
+  RotateCcw,
+  Save,
+  X,
+} from 'lucide-react';
 
 import DAY_LABELS from '../constants/dayLabels';
 
@@ -82,30 +91,49 @@ export default function DoctorAvailabilityEditor({
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-800 bg-gray-950/40 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-sm font-medium text-white">
-          {doctorName}&apos;s availability
-        </p>
+    <section className="mt-4 overflow-hidden rounded-xl border border-[#cfe3dc] bg-brand-softer/60">
+      <header className="flex items-start justify-between gap-3 border-b border-[#d7e7e1] bg-white/80 p-4">
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-dark">
+            <CalendarClock className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <div>
+            <span className="status-pill status-info mb-1.5">Doctor-specific schedule</span>
+            <h4 className="text-xs font-bold text-ink">{doctorName}&apos;s availability</h4>
+          </div>
+        </div>
         <button
           type="button"
           onClick={onClose}
-          className="text-xs text-gray-500 hover:text-gray-300"
+          className="icon-button h-8 w-8"
+          aria-label={`Close ${doctorName}'s availability editor`}
         >
-          Close
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
-      </div>
+      </header>
 
-      <p className="text-xs text-gray-500 mb-4">
-        Override this doctor&apos;s hours for the current clinic. Any day left as
-        &quot;Use clinic hours&quot; automatically follows the clinic&apos;s own business
-        hours, including future changes to them.
-      </p>
+      <div className="p-4 sm:p-5">
+        <div className="alert-info mb-4">
+          <Clock3 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <p>
+            Override this doctor&apos;s hours for the current clinic. Any day left as
+            &quot;Use clinic hours&quot; automatically follows the clinic&apos;s own business
+            hours, including future changes to them.
+          </p>
+        </div>
 
-      {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
-      ) : (
-        <div className="space-y-4">
+        {loading ? (
+          <div className="space-y-2" role="status" aria-label="Loading doctor availability">
+            {[0, 1, 2].map((row) => (
+              <div key={row} className="flex items-center gap-3 rounded-lg bg-white/70 p-3">
+                <span className="skeleton h-3.5 w-20" />
+                <span className="skeleton ml-auto h-9 w-48" />
+              </div>
+            ))}
+            <span className="sr-only">Loading doctor availability</span>
+          </div>
+        ) : (
+        <div className="overflow-hidden rounded-xl border border-line bg-white">
           {DAYS.map((day) => {
             const override = draft[day];
             const inherited = data?.inheritedBusinessHours?.[day];
@@ -114,15 +142,16 @@ export default function DoctorAvailabilityEditor({
             return (
               <div
                 key={day}
-                className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4"
+                className="grid gap-3 border-b border-line px-3.5 py-3 last:border-b-0 lg:grid-cols-[8rem_minmax(0,1fr)] lg:items-center"
               >
-                <span className="text-sm text-gray-300 md:w-24">
+                <span className="text-xs font-bold text-ink">
                   {DAY_LABELS[day]}
                 </span>
 
                 {!hasOverride ? (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="text-sm text-gray-600">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="status-pill status-neutral">Clinic hours</span>
+                    <span className="text-[0.72rem] font-medium text-muted">
                       Clinic hours: {formatHours(inherited)}
                     </span>
                     <button
@@ -136,49 +165,55 @@ export default function DoctorAvailabilityEditor({
                           },
                         }))
                       }
-                      className="text-xs text-blue-400 hover:text-blue-300"
+                      className="btn-ghost min-h-8 px-2.5 py-1.5 text-[0.68rem] text-brand"
                     >
-                      Override
+                      <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" /> Override
                     </button>
                   </div>
                 ) : (
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <input
-                      type="time"
-                      value={override.open}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [day]: { ...override, open: e.target.value },
-                        }))
-                      }
-                      className="text-sm bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2"
-                    />
+                  <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center">
+                    <span className="status-pill status-info">Override</span>
 
-                    <span className="hidden sm:block text-gray-600 text-sm">
-                      to
-                    </span>
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:flex">
+                      <label htmlFor={`doctor-${doctorId}-${day}-open`} className="sr-only">{DAY_LABELS[day]} opening time for {doctorName}</label>
+                      <input
+                        id={`doctor-${doctorId}-${day}-open`}
+                        type="time"
+                        value={override.open}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            [day]: { ...override, open: e.target.value },
+                          }))
+                        }
+                        className="ui-input min-w-0 sm:w-[8.5rem]"
+                      />
 
-                    <input
-                      type="time"
-                      value={override.close}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [day]: { ...override, close: e.target.value },
-                        }))
-                      }
-                      className="text-sm bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2"
-                    />
+                      <span className="text-[0.7rem] font-medium text-muted">to</span>
+
+                      <label htmlFor={`doctor-${doctorId}-${day}-close`} className="sr-only">{DAY_LABELS[day]} closing time for {doctorName}</label>
+                      <input
+                        id={`doctor-${doctorId}-${day}-close`}
+                        type="time"
+                        value={override.close}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            [day]: { ...override, close: e.target.value },
+                          }))
+                        }
+                        className="ui-input min-w-0 sm:w-[8.5rem]"
+                      />
+                    </div>
 
                     <button
                       type="button"
                       onClick={() =>
                         setDraft((prev) => ({ ...prev, [day]: null }))
                       }
-                      className="text-xs text-red-400 hover:text-red-300 text-left"
+                      className="btn-ghost min-h-8 justify-start px-2.5 py-1.5 text-[0.68rem] text-muted"
                     >
-                      Use clinic hours
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /> Use clinic hours
                     </button>
                   </div>
                 )}
@@ -186,19 +221,34 @@ export default function DoctorAvailabilityEditor({
             );
           })}
         </div>
-      )}
+        )}
 
-      {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
-      {saved && <p className="mt-3 text-xs text-green-400">Availability saved.</p>}
+        {error && (
+          <div className="alert-error mt-4" role="alert">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>{error}</p>
+          </div>
+        )}
+        {saved && (
+          <div className="alert-success mt-4" role="status">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>Availability saved.</p>
+          </div>
+        )}
 
-      <button
-        type="button"
-        onClick={save}
-        disabled={saving || loading}
-        className="mt-4 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {saving ? 'Saving...' : 'Save availability'}
-      </button>
-    </div>
+        <div className="mt-4 flex flex-col gap-2 border-t border-[#d7e7e1] pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[0.68rem] leading-5 text-muted">This saves only {doctorName}&apos;s schedule for the current clinic.</p>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving || loading}
+            className="btn-primary shrink-0"
+          >
+            <Save className="h-4 w-4" aria-hidden="true" />
+            {saving ? 'Saving...' : 'Save availability'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

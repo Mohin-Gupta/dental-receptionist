@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
 import { AuthProvider } from '@/lib/auth';
+import '@fontsource-variable/manrope';
+import '@fontsource-variable/newsreader';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'AI Receptionist — Clinic operations',
-  description: 'Multi-tenant AI receptionist and clinic operations dashboard',
+  title: 'Maya — Clinic intelligence',
+  description: 'AI-powered patient communication and clinic operations, beautifully coordinated.',
 };
 
 export default function RootLayout({
@@ -14,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
+      <body className="antialiased">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

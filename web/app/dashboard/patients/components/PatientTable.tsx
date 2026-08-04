@@ -15,64 +15,60 @@ export default function PatientTable({
   patients,
 }: Props) {
   return (
-    <div className="hidden md:block">
-      <div className="grid grid-cols-5 px-6 py-3 border-b border-gray-800 text-xs font-medium text-gray-500 uppercase tracking-wider">
-        <span className="col-span-2">
-          Patient
-        </span>
+    <div className="hidden max-w-full overflow-x-auto xl:block">
+      <table className="w-full min-w-[720px] table-fixed border-collapse text-left">
+        <colgroup>
+          <col style={{ width: '38%' }} />
+          <col style={{ width: '24%' }} />
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '20%' }} />
+        </colgroup>
+        <thead className="data-header">
+          <tr>
+            <th scope="col" className="px-6 py-3.5">Patient</th>
+            <th scope="col" className="px-4 py-3.5">Phone</th>
+            <th scope="col" className="px-4 py-3.5">Total visits</th>
+            <th scope="col" className="px-6 py-3.5">Last visit</th>
+          </tr>
+        </thead>
 
-        <span>Phone</span>
-
-        <span>Total Visits</span>
-
-        <span>Last Visit</span>
-      </div>
-
-      <div className="divide-y divide-gray-800">
+        <tbody>
         {patients.map(
           (patient) => (
-            <div
-              key={
-                patient.id
-              }
-              className="grid grid-cols-5 px-6 py-4 hover:bg-gray-800/50 transition-colors items-center"
-            >
-              <div className="col-span-2 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-purple-600/20 flex items-center justify-center">
-                  <span className="text-purple-400 text-sm font-semibold">
+            <tr key={patient.id} className="data-row">
+              <th scope="row" className="px-6 py-4 font-normal">
+                <div className="flex items-center gap-3">
+                  <span className="avatar h-10 w-10 text-sm">
                     {getInitial(
                       patient.name
                     )}
                   </span>
+
+                  <div className="min-w-0">
+                    <p className="truncate text-[0.82rem] font-bold text-ink">
+                      {patient.name}
+                    </p>
+
+                    <p className="mt-1 text-[0.66rem] font-medium text-muted">
+                      Since{' '}
+                      {format(
+                        new Date(
+                          patient.createdAt
+                        ),
+                        'MMM yyyy'
+                      )}
+                    </p>
+                  </div>
                 </div>
+              </th>
 
-                <div>
-                  <p className="text-sm font-medium text-white">
-                    {
-                      patient.name
-                    }
-                  </p>
+              <td className="overflow-hidden px-4 py-4 font-mono text-[0.76rem] text-ink-soft">
+                <span className="block truncate">{patient.phone}</span>
+              </td>
 
-                  <p className="text-xs text-gray-500">
-                    Since{' '}
-                    {format(
-                      new Date(
-                        patient.createdAt
-                      ),
-                      'MMM yyyy'
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <span className="text-sm text-gray-300 font-mono">
-                {
-                  patient.phone
-                }
-              </span>
-
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-white">
+              <td className="px-4 py-4">
+                <div className="inline-flex items-baseline gap-1.5 rounded-lg bg-brand-softer px-2.5 py-1.5">
+                  <span className="text-sm font-bold text-brand-dark">
                   {
                     patient
                       ._count
@@ -80,22 +76,24 @@ export default function PatientTable({
                   }
                 </span>
 
-                <span className="text-xs text-gray-500">
+                  <span className="text-[0.65rem] font-semibold text-muted">
                   visits
-                </span>
-              </div>
+                  </span>
+                </div>
+              </td>
 
-              <span className="text-sm text-gray-400">
+              <td className="px-6 py-4 text-[0.78rem] font-medium text-muted">
                 {getLastVisit(
                   patient
                     .appointments[0]
                     ?.startAt
                 )}
-              </span>
-            </div>
+              </td>
+            </tr>
           )
         )}
-      </div>
+        </tbody>
+      </table>
     </div>
   );
 }

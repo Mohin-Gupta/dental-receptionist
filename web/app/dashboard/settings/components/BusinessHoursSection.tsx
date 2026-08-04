@@ -2,6 +2,7 @@ import { BranchSettings } from '@/lib/api';
 import { createDefaultBusinessHours } from '../utils/settingsHelpers';
 import Section from './Section';
 import DAY_LABELS from '../constants/dayLabels';
+import { Clock3, Plus, X } from 'lucide-react';
 
 interface Props {
   form: BranchSettings;
@@ -29,14 +30,19 @@ export default function BusinessHoursSection({
   update,
 }: Props) {
   return (
-    <Section title="Business Hours">
-      <p className="text-xs text-gray-500 mb-4">
-        Hours below are interpreted
-        in the clinic timezone
-        selected above.
-      </p>
+    <Section
+      id="hours-settings"
+      title="Business hours"
+      description="Set the weekly schedule Maya uses when offering appointment times."
+      eyebrow="Availability"
+      icon={Clock3}
+    >
+      <div className="alert-info mb-5">
+        <Clock3 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <p>Hours below are interpreted in the clinic timezone selected above.</p>
+      </div>
 
-      <div className="space-y-4">
+      <div className="overflow-hidden rounded-xl border border-line bg-white">
         {DAYS.map((day) => {
           const hours =
             form.businessHours?.[
@@ -46,23 +52,23 @@ export default function BusinessHoursSection({
           return (
             <div
               key={day}
-              className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4"
+              className="grid gap-3 border-b border-line px-4 py-3.5 last:border-b-0 md:grid-cols-[8rem_minmax(0,1fr)] md:items-center md:px-5"
             >
-              <span className="text-sm text-gray-300 md:w-24">
-                {
-                  DAY_LABELS[
-                    day
-                  ]
-                }
-              </span>
+              <div className="flex items-center justify-between md:block">
+                <span className="text-xs font-bold text-ink">{DAY_LABELS[day]}</span>
+                <span className={`status-pill md:hidden ${hours == null ? 'status-neutral' : 'status-success'}`}>
+                  {hours == null ? 'Closed' : 'Open'}
+                </span>
+              </div>
 
               {hours == null ? (
-                <div className="flex items-center gap-3 flex-wrap">
-                  <span className="text-sm text-gray-600">
-                    Closed
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="status-pill status-neutral hidden md:inline-flex">
+                    <span className="status-dot" aria-hidden="true" /> Closed
                   </span>
 
                   <button
+                    type="button"
                     onClick={() =>
                       update(
                         'businessHours',
@@ -73,70 +79,63 @@ export default function BusinessHoursSection({
                         }
                       )
                     }
-                    className="text-xs text-blue-400 hover:text-blue-300"
+                    className="btn-ghost min-h-9 px-3 py-2 text-[0.7rem] text-brand"
                   >
-                    Set hours
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" /> Set hours
                   </button>
                 </div>
               ) : (
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <input
-                    type="time"
-                    value={
-                      hours.open
-                    }
-                    onChange={(
-                      e
-                    ) =>
-                      update(
-                        'businessHours',
-                        {
-                          ...form.businessHours,
-                          [day]:
-                            {
-                              ...hours,
-                              open:
-                                e
-                                  .target
-                                  .value,
-                            },
-                        }
-                      )
-                    }
-                    className="text-sm bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2"
-                  />
-
-                  <span className="hidden sm:block text-gray-600 text-sm">
-                    to
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <span className="status-pill status-success hidden md:inline-flex">
+                    <span className="status-dot" aria-hidden="true" /> Open
                   </span>
 
-                  <input
-                    type="time"
-                    value={
-                      hours.close
-                    }
-                    onChange={(
-                      e
-                    ) =>
-                      update(
-                        'businessHours',
-                        {
-                          ...form.businessHours,
-                          [day]:
-                            {
+                  <div className="flex items-center gap-2">
+                    <label htmlFor={`business-${day}-open`} className="sr-only">{DAY_LABELS[day]} opening time</label>
+                    <input
+                      id={`business-${day}-open`}
+                      type="time"
+                      value={hours.open}
+                      onChange={(e) =>
+                        update(
+                          'businessHours',
+                          {
+                            ...form.businessHours,
+                            [day]: {
                               ...hours,
-                              close:
-                                e
-                                  .target
-                                  .value,
+                              open: e.target.value,
                             },
-                        }
-                      )
-                    }
-                    className="text-sm bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2"
-                  />
+                          }
+                        )
+                      }
+                      className="ui-input w-[8.5rem]"
+                    />
+
+                    <span className="text-[0.7rem] font-medium text-muted">to</span>
+
+                    <label htmlFor={`business-${day}-close`} className="sr-only">{DAY_LABELS[day]} closing time</label>
+                    <input
+                      id={`business-${day}-close`}
+                      type="time"
+                      value={hours.close}
+                      onChange={(e) =>
+                        update(
+                          'businessHours',
+                          {
+                            ...form.businessHours,
+                            [day]: {
+                              ...hours,
+                              close: e.target.value,
+                            },
+                          }
+                        )
+                      }
+                      className="ui-input w-[8.5rem]"
+                    />
+                  </div>
 
                   <button
+                    type="button"
                     onClick={() =>
                       update(
                         'businessHours',
@@ -147,9 +146,9 @@ export default function BusinessHoursSection({
                         }
                       )
                     }
-                    className="text-xs text-red-400 hover:text-red-300 text-left"
+                    className="btn-ghost min-h-9 justify-start px-3 py-2 text-[0.7rem] text-danger"
                   >
-                    Set closed
+                    <X className="h-3.5 w-3.5" aria-hidden="true" /> Set closed
                   </button>
                 </div>
               )}

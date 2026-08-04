@@ -16,22 +16,24 @@ export default function SaveButton({
 }: Props) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={saving}
-      className={`w-full md:w-auto flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+      className={`w-full md:w-auto ${
         saved
-          ? 'bg-emerald-600 text-white'
-          : 'bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50'
+          ? 'btn-secondary border-[#cce7dc] bg-success-soft text-success'
+          : 'btn-primary'
       }`}
+      aria-live="polite"
     >
       {saved ? (
         <>
-          <CheckCircle className="w-4 h-4" />
+          <CheckCircle className="h-4 w-4" aria-hidden="true" />
           Saved
         </>
       ) : (
         <>
-          <Save className="w-4 h-4" />
+          <Save className="h-4 w-4" aria-hidden="true" />
 
           {saving
             ? 'Saving...'

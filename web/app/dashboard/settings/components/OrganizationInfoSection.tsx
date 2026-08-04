@@ -4,6 +4,7 @@ import {
 
 import Field from './Field';
 import Section from './Section';
+import { Building2, LockKeyhole } from 'lucide-react';
 
 interface Props {
   form: OrganizationSettings;
@@ -22,8 +23,21 @@ export default function OrganizationInfoSection({
   update,
 }: Props) {
   return (
-    <Section title="Organization">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <Section
+      id="organization-settings"
+      title="Organization profile"
+      description="The shared identity used across every clinic in your organization."
+      eyebrow="Organization"
+      icon={Building2}
+    >
+      {!canEdit && (
+        <div className="alert-info mb-5">
+          <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <p>Only the organization owner can update these details. You can still review the current profile.</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field
           label="Organization name"
           value={form.name}
@@ -70,11 +84,12 @@ export default function OrganizationInfoSection({
         />
 
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-gray-400 mb-1.5">
+          <label htmlFor="organization-about" className="ui-label">
             About
           </label>
 
           <textarea
+            id="organization-about"
             value={form.about ?? ''}
             onChange={(event) =>
               update(
@@ -85,7 +100,7 @@ export default function OrganizationInfoSection({
             }
             disabled={!canEdit}
             rows={3}
-            className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+            className="ui-textarea min-h-28 resize-none"
           />
         </div>
       </div>

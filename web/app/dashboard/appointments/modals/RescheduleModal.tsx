@@ -10,10 +10,14 @@ import api, {
 } from '@/lib/api';
 
 import {
+  CalendarDays,
   CalendarClock,
+  CircleAlert,
+  Info,
   Loader2,
   X,
 } from 'lucide-react';
+import useModalBehavior from './useModalBehavior';
 
 interface RescheduleModalProps {
   appointment: Appointment;
@@ -28,6 +32,8 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalBehavior(onClose, firstFieldRef);
 
   const [minDate] = useState(
   () => new Date().toISOString().split('T')[0]
@@ -66,81 +72,103 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-6 shadow-2xl">
-        <div className="flex items-center justify-between mb-6">
+    <div className="modal-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="modal-panel max-w-md"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reschedule-appointment-title"
+        aria-describedby="reschedule-appointment-description"
+        tabIndex={-1}
+      >
+        <header className="modal-header">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
-              <CalendarClock className="w-4 h-4 text-blue-400" />
-            </div>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand">
+              <CalendarClock className="h-4 w-4" aria-hidden="true" />
+            </span>
             <div>
-              <h3 className="text-sm font-semibold text-white">Reschedule Appointment</h3>
-              <p className="text-xs text-gray-400">{appointment.patient.name}</p>
+              <p className="section-kicker mb-1">Update schedule</p>
+              <h2 id="reschedule-appointment-title" className="section-title">Reschedule appointment</h2>
+              <p id="reschedule-appointment-description" className="section-description mt-0.5">{appointment.patient.name}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
-            <X className="w-5 h-5" />
+          <button type="button" onClick={onClose} className="icon-button" aria-label="Close reschedule appointment dialog">
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
-        </div>
+        </header>
 
-        <div className="bg-gray-800 rounded-xl p-4 mb-5">
-          <p className="text-xs text-gray-500 mb-1">Current appointment</p>
-          <p className="text-sm font-medium text-white">{appointment.reason}</p>
-          <p className="text-xs text-gray-400 mt-1">{formatDateTime(appointment.startAt, timezone)}</p>
-        </div>
+        <div className="space-y-5 p-5">
+          <div className="surface-card-soft p-4">
+            <p className="section-kicker">Current appointment</p>
+            <p className="mt-2 text-sm font-bold text-ink">{appointment.reason}</p>
+            <p className="mt-2 flex items-center gap-2 text-xs font-medium text-muted">
+              <CalendarDays className="h-3.5 w-3.5 text-brand" aria-hidden="true" />
+              {formatDateTime(appointment.startAt, timezone)}
+            </p>
+          </div>
 
-        <div className="space-y-4 mb-5">
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">New date</label>
-            <input
-              type="date"
-              value={newDate}
-              min={minDate}
-              onChange={e => setNewDate(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <p className="mb-3 text-xs font-bold text-ink">Choose a new appointment time</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="reschedule-date" className="ui-label">New date</label>
+                <input
+                  ref={firstFieldRef}
+                  id="reschedule-date"
+                  type="date"
+                  value={newDate}
+                  min={minDate}
+                  onChange={e => setNewDate(e.target.value)}
+                  className="ui-input"
+                />
+              </div>
+              <div>
+                <label htmlFor="reschedule-time" className="ui-label">New time</label>
+                <input
+                  id="reschedule-time"
+                  type="time"
+                  value={newTime}
+                  onChange={e => setNewTime(e.target.value)}
+                  className="ui-input"
+                />
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5">New time</label>
-            <input
-              type="time"
-              value={newTime}
-              onChange={e => setNewTime(e.target.value)}
-              className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+
+          {error && (
+            <div className="alert-error" role="alert">
+              <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>{error}</p>
+            </div>
+          )}
+
+          <div className="alert-info">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>The patient will automatically receive an SMS notification about this reschedule.</p>
           </div>
         </div>
 
-        {error && (
-          <div className="mb-4 px-3 py-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <p className="text-xs text-red-400">{error}</p>
-          </div>
-        )}
-
-        <div className="mb-5 px-3 py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-          <p className="text-xs text-blue-300">
-            The patient will automatically receive an SMS notification about this reschedule.
-          </p>
-        </div>
-
-        <div className="flex gap-3">
+        <footer className="modal-footer">
           <button
+            type="button"
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 text-sm text-gray-300 border border-gray-700 rounded-lg hover:bg-gray-800 transition-colors"
+            className="btn-secondary flex-1"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={loading || !newDate || !newTime}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-primary flex-1"
           >
             {loading
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Rescheduling...</>
-              : <><CalendarClock className="w-4 h-4" /> Confirm Reschedule</>
+              ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Rescheduling...</>
+              : <><CalendarClock className="h-4 w-4" aria-hidden="true" /> Confirm Reschedule</>
             }
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );

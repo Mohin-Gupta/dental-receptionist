@@ -5,6 +5,7 @@ import Section from './Section';
 import TimezonePreview from './TimezonePreview';
 
 import { TIMEZONE_OPTIONS } from '../constants/timezoneOptions';
+import { MapPinned, TriangleAlert } from 'lucide-react';
 
 interface Props {
   form: BranchSettings;
@@ -21,8 +22,14 @@ export default function ClinicInfoSection({
   update,
 }: Props) {
   return (
-    <Section title="Clinic Information">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <Section
+      id="clinic-settings"
+      title="Clinic information"
+      description="Patient-facing contact details, location context, and local scheduling timezone."
+      eyebrow="Location profile"
+      icon={MapPinned}
+    >
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field
           label="Clinic name"
           value={form.name}
@@ -35,6 +42,7 @@ export default function ClinicInfoSection({
           label="Phone number"
           value={form.phone}
           disabled
+          helper="This clinic number is managed when the location is created."
         />
 
         <Field
@@ -66,11 +74,12 @@ export default function ClinicInfoSection({
         />
 
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-gray-400 mb-1.5">
+          <label htmlFor="clinic-timezone" className="ui-label">
             Clinic timezone
           </label>
 
           <select
+            id="clinic-timezone"
             value={
               form.timezone ??
               'Asia/Kolkata'
@@ -81,7 +90,7 @@ export default function ClinicInfoSection({
                 e.target.value
               )
             }
-            className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="ui-select"
           >
             {TIMEZONE_OPTIONS.map(
               (group) => (
@@ -119,18 +128,13 @@ export default function ClinicInfoSection({
             }
           />
 
-          <p className="text-xs text-amber-400/80 mt-2">
-            Changing this
-            affects all future
-            appointment
-            reminders, SMS
-            timing, and Google
-            Calendar sync.
-            Existing
-            appointments keep
-            their original
-            scheduled times.
-          </p>
+          <div className="alert-warning mt-3">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>
+              Changing this affects all future appointment reminders, SMS timing, and Google Calendar sync.
+              Existing appointments keep their original scheduled times.
+            </p>
+          </div>
         </div>
 
         <div className="md:col-span-2">
@@ -151,11 +155,12 @@ export default function ClinicInfoSection({
         </div>
 
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-gray-400 mb-1.5">
+          <label htmlFor="clinic-about" className="ui-label">
             About the clinic
           </label>
 
           <textarea
+            id="clinic-about"
             value={
               form.clinicAbout ??
               ''
@@ -168,7 +173,7 @@ export default function ClinicInfoSection({
             }
             rows={4}
             placeholder="Brief description of your clinic..."
-            className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            className="ui-textarea min-h-32 resize-none"
           />
         </div>
       </div>

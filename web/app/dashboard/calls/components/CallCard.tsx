@@ -33,100 +33,105 @@ export default function CallCard({
 
   const displayPhone =
     getDisplayPhone(call);
+  const transcriptId = `call-transcript-${call.id}`;
 
-  return (
-    <div>
-      <div
-        onClick={onToggle}
-        className="p-4 cursor-pointer"
-      >
+  const summary = (
+    <>
         <div className="flex items-start justify-between">
-          <div className="flex gap-3">
+          <div className="flex min-w-0 flex-1 gap-3">
             <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center ${
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
                 call.direction ===
                 'inbound'
-                  ? 'bg-green-600/20'
-                  : 'bg-blue-600/20'
+                  ? 'border-[#cce7dc] bg-success-soft text-success'
+                  : 'border-[#cce1e8] bg-info-soft text-info'
               }`}
             >
               {call.direction ===
               'inbound' ? (
-                <PhoneIncoming className="w-4 h-4 text-green-400" />
+                <PhoneIncoming className="h-4 w-4" aria-hidden="true" />
               ) : (
-                <PhoneOutgoing className="w-4 h-4 text-blue-400" />
+                <PhoneOutgoing className="h-4 w-4" aria-hidden="true" />
               )}
             </div>
 
-            <div>
-              <p className="text-white font-medium font-mono">
-                {displayPhone}
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-ink">
+                {call.patient?.name ?? displayPhone}
               </p>
-
-              <p className="text-xs text-gray-500 capitalize">
-                {call.direction} call
+              <p className="mt-1 truncate font-mono text-[0.68rem] text-muted">
+                {call.patient?.name ? displayPhone : `${call.direction} call`}
               </p>
             </div>
           </div>
 
           {hasTranscript &&
             (expanded ? (
-              <ChevronUp className="w-4 h-4 text-gray-500" />
+              <ChevronUp className="h-4 w-4 text-brand" aria-hidden="true" />
             ) : (
-              <ChevronDown className="w-4 h-4 text-gray-500" />
+              <ChevronDown className="h-4 w-4 text-muted" aria-hidden="true" />
             ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mt-4 text-sm">
-          <div>
-            <p className="text-gray-500 text-xs mb-1">
-              Duration
-            </p>
-
-            <p className="text-gray-300">
+        <div className="mt-4 grid grid-cols-2 gap-2.5">
+          <div className="rounded-xl bg-surface-subtle p-3">
+            <p className="text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">Duration</p>
+            <p className="mt-1.5 text-xs font-bold text-ink-soft">
               {formatDuration(
                 call.durationSecs
               )}
             </p>
           </div>
 
-          <div>
-            <p className="text-gray-500 text-xs mb-1">
-              Outcome
-            </p>
-
-            <p className="text-gray-300 capitalize">
+          <div className="rounded-xl bg-surface-subtle p-3">
+            <p className="text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">Outcome</p>
+            <p className="mt-1.5 text-xs font-bold capitalize text-ink-soft">
               {call.outcome ?? '—'}
             </p>
           </div>
         </div>
 
-        <div className="mt-4">
-          <p className="text-gray-500 text-xs mb-1">
-            Date & Time
-          </p>
-
-          <p className="text-gray-300 text-sm">
+        <div className="mt-2.5 rounded-xl border border-line bg-white p-3">
+          <p className="text-[0.62rem] font-bold uppercase tracking-[0.09em] text-muted">Date &amp; time</p>
+          <p className="mt-1.5 text-xs font-semibold text-ink-soft">
             {formatDateTime(
               call.createdAt,
               timezone
             )}
           </p>
         </div>
-      </div>
+    </>
+  );
+
+  return (
+    <article className="rounded-[1rem] border border-line bg-white shadow-[0_6px_22px_rgba(19,43,35,0.045)]">
+      {hasTranscript ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="w-full p-4 text-left"
+          aria-expanded={expanded}
+          aria-controls={transcriptId}
+        >
+          {summary}
+        </button>
+      ) : (
+        <div className="w-full p-4 text-left">
+          {summary}
+        </div>
+      )}
 
       {expanded &&
         hasTranscript && (
-          <div className="px-4 pb-4">
-            <div className="rounded-lg border border-gray-800 bg-gray-950 p-3">
+          <div id={transcriptId} className="border-t border-line bg-surface-subtle p-4">
+            <p className="mb-3 text-[0.62rem] font-bold uppercase tracking-[0.12em] text-brand">Conversation transcript</p>
               <TranscriptPanel
                 transcript={
                   call.transcript!
                 }
               />
-            </div>
           </div>
         )}
-    </div>
+    </article>
   );
 }

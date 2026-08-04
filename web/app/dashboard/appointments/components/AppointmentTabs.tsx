@@ -36,26 +36,29 @@ export default function AppointmentTabs({
   onChange,
 }: Props) {
   return (
-    <div className="mb-5 overflow-x-auto">
-      <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 min-w-max">
+    <div className="mb-5 overflow-x-auto pb-0.5">
+      <div className="segmented-control" role="tablist" aria-label="Appointment status">
         {tabs.map((tab) => {
           const Icon = tab.icon;
 
           return (
             <button
+              type="button"
               key={tab.key}
+              role="tab"
+              aria-selected={activeTab === tab.key}
               onClick={() =>
                 onChange(
                   tab.key as TabType
                 )
               }
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`segmented-item ${
                 activeTab === tab.key
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                  ? 'segmented-item-active'
+                  : ''
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
 
               {tab.label}
             </button>

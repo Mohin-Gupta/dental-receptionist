@@ -10,10 +10,10 @@ export default function SuccessAlert({
   if (!message) return null;
 
   return (
-    <div className="mb-4 px-4 py-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-3">
-      <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+    <div className="alert-success mb-5" role="status" aria-live="polite">
+      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
 
-      <p className="text-sm text-emerald-300">
+      <p className="font-medium">
         {message}
       </p>
     </div>

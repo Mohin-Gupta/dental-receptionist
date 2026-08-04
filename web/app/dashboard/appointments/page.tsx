@@ -4,7 +4,8 @@ import { useCallback, useState } from 'react';
 
 import { Appointment } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Calendar, Plus } from 'lucide-react';
+import { CalendarDays, Plus } from 'lucide-react';
+import PageHeader from '@/components/ui/PageHeader';
 
 import useAppointments from './hooks/useAppointments';
 
@@ -63,30 +64,28 @@ export default function AppointmentsPage() {
     activeTab === 'upcoming' && canWriteAppointments;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white">
-            Appointments
-          </h1>
-
-          <p className="text-sm text-gray-400 mt-1">
-            {total} {activeTab} appointments
-          </p>
-        </div>
-
-        {canWriteAppointments && (
+    <div className="page-shell">
+      <PageHeader
+        eyebrow="Clinical schedule"
+        title="Appointments"
+        icon={CalendarDays}
+        description={
+          <>
+            <span className="font-semibold text-ink-soft">{total}</span>{' '}
+            {activeTab} appointments in this clinic
+          </>
+        }
+        actions={canWriteAppointments ? (
           <button
-            onClick={() =>
-              setShowNewModal(true)
-            }
-            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors w-full sm:w-auto"
+            type="button"
+            onClick={() => setShowNewModal(true)}
+            className="btn-primary w-full sm:w-auto"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="h-4 w-4" aria-hidden="true" />
             New Appointment
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <SuccessAlert
         message={successMessage}
@@ -100,22 +99,32 @@ export default function AppointmentsPage() {
         }}
       />
 
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <section className="surface-card overflow-hidden" aria-label={`${activeTab} appointments`}>
         {loading ? (
-          <div className="flex items-center justify-center h-48">
-            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="space-y-1 p-4 sm:p-5" role="status" aria-label="Loading appointments">
+            {[0, 1, 2, 3].map((row) => (
+              <div key={row} className="flex items-center gap-4 rounded-xl px-2 py-3">
+                <span className="skeleton h-9 w-9 shrink-0 rounded-full" />
+                <span className="skeleton h-3.5 w-32" />
+                <span className="skeleton ml-auto hidden h-3.5 w-40 sm:block" />
+                <span className="skeleton hidden h-6 w-20 lg:block" />
+              </div>
+            ))}
+            <span className="sr-only">Loading appointments</span>
           </div>
         ) : appointments.length === 0 ? (
-          <div className="py-20 text-center">
-            <Calendar className="w-8 h-8 text-gray-700 mx-auto mb-3" />
-
-            <p className="text-sm text-gray-500">
-              No {activeTab} appointments
+          <div className="px-5 py-16 text-center sm:py-20">
+            <span className="empty-illustration mx-auto">
+              <CalendarDays className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <h2 className="mt-4 text-sm font-bold text-ink">No {activeTab} appointments</h2>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs leading-5 text-muted">
+              Appointments in this category will appear here as your clinic schedule changes.
             </p>
           </div>
         ) : (
           <>
-            <div className="lg:hidden p-4 space-y-3">
+            <div className="space-y-3 bg-surface-subtle p-3 sm:p-4 xl:hidden">
               {appointments.map(
                 (appointment) => (
                   <AppointmentCard
@@ -135,24 +144,6 @@ export default function AppointmentsPage() {
                     }
                   />
                 )
-              )}
-            </div>
-
-            <div
-              className={`hidden lg:grid px-6 py-3 border-b border-gray-800 text-xs font-medium text-gray-500 uppercase tracking-wider ${
-                showActions
-                  ? 'grid-cols-6'
-                  : 'grid-cols-5'
-              }`}
-            >
-              <span>Patient</span>
-              <span>Reason</span>
-              <span>Date & Time</span>
-              <span>Status</span>
-              <span>Phone</span>
-
-              {showActions && (
-                <span>Actions</span>
               )}
             </div>
 
@@ -192,7 +183,7 @@ export default function AppointmentsPage() {
             />
           </>
         )}
-      </div>
+      </section>
 
       {showNewModal && (
         <NewAppointmentModal

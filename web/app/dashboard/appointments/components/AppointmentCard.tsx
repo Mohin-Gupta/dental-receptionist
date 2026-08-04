@@ -4,7 +4,9 @@ import {
 } from '@/lib/api';
 
 import {
+  CalendarDays,
   CalendarClock,
+  Phone,
   Trash2,
 } from 'lucide-react';
 
@@ -30,16 +32,20 @@ export default function AppointmentCard({
   onCancel,
 }: Props) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <article className="rounded-[1rem] border border-line bg-white p-4 shadow-[0_6px_22px_rgba(19,43,35,0.045)]">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="font-medium text-white truncate">
-            {appointment.patient.name}
-          </h3>
-
-          <p className="text-sm text-gray-400 mt-1 break-words">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="avatar h-10 w-10 text-sm">
+            {appointment.patient.name.charAt(0).toUpperCase()}
+          </span>
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-bold text-ink">
+              {appointment.patient.name}
+            </h3>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">
             {appointment.reason}
-          </p>
+            </p>
+          </div>
         </div>
 
         <StatusBadge
@@ -47,54 +53,56 @@ export default function AppointmentCard({
         />
       </div>
 
-      <div className="mt-4 space-y-2">
-        <div>
-          <p className="text-xs text-gray-500">
-            Appointment
-          </p>
-
-          <p className="text-sm text-gray-300">
+      <div className="mt-4 grid gap-2.5 rounded-xl bg-surface-subtle p-3 sm:grid-cols-2">
+        <div className="flex items-start gap-2.5">
+          <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+          <div>
+            <p className="text-[0.64rem] font-bold uppercase tracking-[0.1em] text-muted">Appointment</p>
+            <p className="mt-1 text-xs font-semibold leading-5 text-ink-soft">
             {formatDateTime(
               appointment.startAt,
               timezone
             )}
-          </p>
+            </p>
+          </div>
         </div>
 
-        <div>
-          <p className="text-xs text-gray-500">
-            Phone
-          </p>
-
-          <p className="text-sm text-gray-400">
+        <div className="flex items-start gap-2.5">
+          <Phone className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+          <div>
+            <p className="text-[0.64rem] font-bold uppercase tracking-[0.1em] text-muted">Phone</p>
+            <p className="mt-1 text-xs font-semibold text-ink-soft">
             {appointment.patient.phone}
-          </p>
+            </p>
+          </div>
         </div>
       </div>
 
       {showActions && (
-        <div className="grid grid-cols-2 gap-2 mt-4">
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <button
+            type="button"
             onClick={() =>
               onReschedule(appointment)
             }
-            className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+            className="btn-secondary min-h-10 px-3"
           >
             <CalendarClock className="w-4 h-4" />
             Reschedule
           </button>
 
           <button
+            type="button"
             onClick={() =>
               onCancel(appointment)
             }
-            className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
+            className="btn-danger-soft min-h-10 px-3"
           >
             <Trash2 className="w-4 h-4" />
             Cancel
           </button>
         </div>
       )}
-    </div>
+    </article>
   );
 }

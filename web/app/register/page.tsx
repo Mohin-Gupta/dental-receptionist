@@ -4,12 +4,17 @@ import axios from 'axios';
 import Link from 'next/link';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import {
+  ArrowRight,
   Building2,
   CheckCircle2,
+  Info,
   Loader2,
   Mail,
-  Stethoscope,
+  MapPin,
+  ShieldCheck,
+  UserRound,
 } from 'lucide-react';
+import AuthShell from '@/components/ui/AuthShell';
 import api, {
   createIdempotencyKey,
   type OrganizationRegistrationResponse,
@@ -23,8 +28,7 @@ const countryOptions = [
   { countryCode: 'AU', callingCode: '61', locale: 'en-AU', label: 'Australia (+61)' },
 ] as const;
 
-const inputClass =
-  'w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500';
+const inputClass = 'ui-input';
 
 function errorMessage(error: unknown, fallback: string): string {
   return axios.isAxiosError(error)
@@ -139,200 +143,253 @@ export default function RegisterOrganizationPage() {
 
   if (registered) {
     return (
-      <div className="min-h-screen bg-gray-950 px-4 py-12 flex items-center justify-center">
-        <div className="w-full max-w-lg rounded-xl border border-gray-800 bg-gray-900 p-7 text-center shadow-2xl">
-          {registered.verificationDeliveryPending ? (
-            <Mail className="mx-auto mb-4 h-10 w-10 text-amber-400" />
-          ) : (
-            <CheckCircle2 className="mx-auto mb-4 h-10 w-10 text-emerald-400" />
-          )}
-          <h1 className="text-xl font-semibold text-white">Organization created</h1>
-          <p className="mt-2 text-sm text-gray-400">
+      <AuthShell>
+        <section className="surface-card rounded-[1.45rem] p-6 text-center shadow-[var(--shadow-md)] sm:p-8" aria-labelledby="registration-complete-title">
+          <div
+            className={`mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] ${
+              registered.verificationDeliveryPending
+                ? 'bg-warning-soft text-warning'
+                : 'bg-success-soft text-success'
+            }`}
+            aria-hidden="true"
+          >
+            {registered.verificationDeliveryPending ? <Mail className="h-6 w-6" /> : <CheckCircle2 className="h-6 w-6" />}
+          </div>
+          <p className="mt-6 text-[0.68rem] font-bold uppercase tracking-[0.16em] text-brand">Workspace created</p>
+          <h1 id="registration-complete-title" className="font-display mt-2 text-[2.35rem] leading-[1.04] tracking-[-0.045em] text-ink">
+            One quick step to begin.
+          </h1>
+          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">
             {registered.verificationDeliveryPending
               ? 'Your workspace is ready, but the first verification email could not be delivered. Retry below.'
               : `We sent a verification link to ${form.email}. Verify your address before signing in.`}
           </p>
-          {notice && <p className="mt-4 text-sm text-emerald-400">{notice}</p>}
-          {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+
+          <div className="mt-6 space-y-3 text-left" aria-live="polite">
+            {notice && (
+              <div className="alert-info" role="status">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>{notice}</p>
+              </div>
+            )}
+            {error && (
+              <div className="alert-error" role="alert">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>{error}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
             <button
               type="button"
               onClick={resendVerification}
               disabled={resending}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-medium text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+              className="btn-secondary min-h-12"
             >
-              {resending && <Loader2 className="h-4 w-4 animate-spin" />}
+              {resending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
               Resend verification
             </button>
-            <Link
-              href="/sign-in"
-              className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
-            >
+            <Link href="/sign-in" className="btn-primary min-h-12">
               Go to sign in
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </Link>
           </div>
-        </div>
-      </div>
+        </section>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-4 py-10">
-      <form
-        onSubmit={submit}
-        className="mx-auto w-full max-w-3xl rounded-xl border border-gray-800 bg-gray-900 p-6 shadow-2xl md:p-8"
-      >
-        <div className="mb-7 flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600">
-            <Building2 className="h-5 w-5 text-white" />
+    <AuthShell wide>
+      <section className="surface-card overflow-hidden rounded-[1.45rem] shadow-[var(--shadow-md)]" aria-labelledby="register-title">
+        <div className="border-b border-line bg-surface-subtle px-6 py-6 sm:px-8">
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
+            <div>
+              <p className="text-[0.68rem] font-bold uppercase tracking-[0.16em] text-brand">New clinic workspace</p>
+              <h1 id="register-title" className="font-display mt-2 text-[2.2rem] leading-[1.04] tracking-[-0.045em] text-ink sm:text-[2.55rem]">
+                Build your calmer front desk.
+              </h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
+                Start with one organization and clinic. More locations can be added later.
+              </p>
+            </div>
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[15px] bg-brand-soft text-brand" aria-hidden="true">
+              <Building2 className="h-5 w-5" />
+            </span>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold text-white">Create your clinic workspace</h1>
-            <p className="mt-1 text-sm text-gray-400">
-              Start with one organization and clinic. More locations can be added later.
-            </p>
-          </div>
         </div>
 
-        <div className="grid gap-5 md:grid-cols-2">
-          <label className="text-xs font-medium text-gray-400">
-            Your name
-            <input
-              className={`${inputClass} mt-1.5`}
-              value={form.ownerName}
-              onChange={event => update('ownerName', event.target.value)}
-              autoComplete="name"
-              minLength={2}
-              maxLength={120}
-              required
-            />
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Work email
-            <input
-              type="email"
-              className={`${inputClass} mt-1.5`}
-              value={form.email}
-              onChange={event => update('email', event.target.value)}
-              autoComplete="email"
-              required
-            />
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Password
-            <input
-              type="password"
-              className={`${inputClass} mt-1.5`}
-              value={form.password}
-              onChange={event => update('password', event.target.value)}
-              autoComplete="new-password"
-              minLength={12}
-              maxLength={200}
-              required
-            />
-            <span className="mt-1 block font-normal text-gray-600">At least 12 characters</span>
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Confirm password
-            <input
-              type="password"
-              className={`${inputClass} mt-1.5`}
-              value={form.confirmPassword}
-              onChange={event => update('confirmPassword', event.target.value)}
-              autoComplete="new-password"
-              minLength={12}
-              required
-            />
-          </label>
-        </div>
+        <form onSubmit={submit} className="p-6 sm:p-8" aria-busy={submitting}>
+          <section aria-labelledby="account-details-title">
+            <div className="mb-5 flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-brand text-xs font-bold text-white">01</span>
+              <div>
+                <h2 id="account-details-title" className="text-sm font-bold text-ink">Your account</h2>
+                <p className="mt-0.5 text-xs text-muted">The workspace owner and secure sign-in details.</p>
+              </div>
+            </div>
 
-        <div className="my-7 border-t border-gray-800" />
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label htmlFor="register-owner-name" className="ui-label">Your name</label>
+                <div className="relative">
+                  <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+                  <input
+                    id="register-owner-name"
+                    className={`${inputClass} pl-10`}
+                    value={form.ownerName}
+                    onChange={event => update('ownerName', event.target.value)}
+                    autoComplete="name"
+                    minLength={2}
+                    maxLength={120}
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="register-email" className="ui-label">Work email</label>
+                <input
+                  id="register-email"
+                  type="email"
+                  className={inputClass}
+                  value={form.email}
+                  onChange={event => update('email', event.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="register-password" className="ui-label">Password</label>
+                <input
+                  id="register-password"
+                  type="password"
+                  className={inputClass}
+                  value={form.password}
+                  onChange={event => update('password', event.target.value)}
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={200}
+                  aria-describedby="register-password-help"
+                  required
+                />
+                <p id="register-password-help" className="ui-help">Use at least 12 characters.</p>
+              </div>
+              <div>
+                <label htmlFor="register-confirm-password" className="ui-label">Confirm password</label>
+                <input
+                  id="register-confirm-password"
+                  type="password"
+                  className={inputClass}
+                  value={form.confirmPassword}
+                  onChange={event => update('confirmPassword', event.target.value)}
+                  autoComplete="new-password"
+                  minLength={12}
+                  required
+                />
+              </div>
+            </div>
+          </section>
 
-        <div className="mb-4 flex items-center gap-2">
-          <Stethoscope className="h-4 w-4 text-blue-400" />
-          <h2 className="text-sm font-semibold text-white">Organization and first clinic</h2>
-        </div>
-        <div className="grid gap-5 md:grid-cols-2">
-          <label className="text-xs font-medium text-gray-400">
-            Organization name
-            <input
-              className={`${inputClass} mt-1.5`}
-              value={form.organizationName}
-              onChange={event => update('organizationName', event.target.value)}
-              minLength={2}
-              maxLength={160}
-              required
-            />
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Clinic name
-            <input
-              className={`${inputClass} mt-1.5`}
-              value={form.clinicName}
-              onChange={event => update('clinicName', event.target.value)}
-              minLength={2}
-              maxLength={160}
-              required
-            />
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Country
-            <select
-              className={`${inputClass} mt-1.5`}
-              value={form.countryCode}
-              onChange={event => selectCountry(event.target.value)}
-            >
-              {countryOptions.map(option => (
-                <option key={option.countryCode} value={option.countryCode}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-medium text-gray-400">
-            Clinic phone
-            <input
-              type="tel"
-              className={`${inputClass} mt-1.5`}
-              value={form.clinicPhone}
-              onChange={event => update('clinicPhone', event.target.value)}
-              placeholder={`+${form.defaultCallingCode} ...`}
-              autoComplete="tel"
-              minLength={7}
-              maxLength={30}
-              required
-            />
-          </label>
-          <label className="text-xs font-medium text-gray-400 md:col-span-2">
-            Clinic timezone
-            <input
-              className={`${inputClass} mt-1.5`}
-              value={form.timezone}
-              onChange={event => update('timezone', event.target.value)}
-              placeholder="Asia/Kolkata"
-              required
-            />
-          </label>
-        </div>
+          <div className="my-8 h-px bg-line" />
 
-        {error && (
-          <div className="mt-5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2.5 text-sm text-red-400">
-            {error}
-          </div>
-        )}
+          <section aria-labelledby="clinic-details-title">
+            <div className="mb-5 flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-brand text-xs font-bold text-white">02</span>
+              <div>
+                <h2 id="clinic-details-title" className="text-sm font-bold text-ink">Clinic profile</h2>
+                <p className="mt-0.5 text-xs text-muted">The home base Maya will use for patient conversations.</p>
+              </div>
+            </div>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-          Create organization
-        </button>
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label htmlFor="register-organization" className="ui-label">Organization name</label>
+                <input
+                  id="register-organization"
+                  className={inputClass}
+                  value={form.organizationName}
+                  onChange={event => update('organizationName', event.target.value)}
+                  minLength={2}
+                  maxLength={160}
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="register-clinic" className="ui-label">Clinic name</label>
+                <input
+                  id="register-clinic"
+                  className={inputClass}
+                  value={form.clinicName}
+                  onChange={event => update('clinicName', event.target.value)}
+                  minLength={2}
+                  maxLength={160}
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="register-country" className="ui-label">Country</label>
+                <select
+                  id="register-country"
+                  className="ui-select"
+                  value={form.countryCode}
+                  onChange={event => selectCountry(event.target.value)}
+                >
+                  {countryOptions.map(option => (
+                    <option key={option.countryCode} value={option.countryCode}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="register-phone" className="ui-label">Clinic phone</label>
+                <input
+                  id="register-phone"
+                  type="tel"
+                  className={inputClass}
+                  value={form.clinicPhone}
+                  onChange={event => update('clinicPhone', event.target.value)}
+                  placeholder={`+${form.defaultCallingCode} ...`}
+                  autoComplete="tel"
+                  minLength={7}
+                  maxLength={30}
+                  required
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label htmlFor="register-timezone" className="ui-label">Clinic timezone</label>
+                <div className="relative">
+                  <MapPin className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+                  <input
+                    id="register-timezone"
+                    className={`${inputClass} pl-10`}
+                    value={form.timezone}
+                    onChange={event => update('timezone', event.target.value)}
+                    placeholder="Asia/Kolkata"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
 
-        <p className="mt-5 text-center text-xs text-gray-500">
-          Already have an account?{' '}
-          <Link href="/sign-in" className="text-blue-400 hover:text-blue-300">Sign in</Link>
-        </p>
-      </form>
-    </div>
+          {error && (
+            <div className="alert-error mt-6" role="alert" aria-live="assertive">
+              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>{error}</p>
+            </div>
+          )}
+
+          <button type="submit" disabled={submitting} className="btn-primary mt-7 min-h-12 w-full text-sm">
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="h-4 w-4" aria-hidden="true" />}
+            Create organization
+          </button>
+
+          <p className="mt-6 text-center text-xs text-muted">
+            Already have an account?{' '}
+            <Link href="/sign-in" className="font-bold text-brand hover:text-brand-dark">Sign in</Link>
+          </p>
+        </form>
+      </section>
+    </AuthShell>
   );
 }

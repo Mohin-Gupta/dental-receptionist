@@ -1,3 +1,6 @@
+import { useId } from 'react';
+import { LockKeyhole } from 'lucide-react';
+
 interface FieldProps {
   label: string;
   value: string;
@@ -7,6 +10,7 @@ interface FieldProps {
   disabled?: boolean;
   type?: string;
   placeholder?: string;
+  helper?: string;
 }
 
 export default function Field({
@@ -16,25 +20,36 @@ export default function Field({
   disabled = false,
   type = 'text',
   placeholder = '',
+  helper,
 }: FieldProps) {
+  const inputId = useId();
+
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1.5">
+      <label htmlFor={inputId} className="ui-label">
         {label}
       </label>
 
-      <input
-        type={type}
-        value={value}
-        onChange={(e) =>
-          onChange?.(
-            e.target.value
-          )
-        }
-        disabled={disabled}
-        placeholder={placeholder}
-        className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-      />
+      <div className="relative">
+        <input
+          id={inputId}
+          type={type}
+          value={value}
+          onChange={(e) =>
+            onChange?.(
+              e.target.value
+            )
+          }
+          disabled={disabled}
+          placeholder={placeholder}
+          className={`ui-input ${disabled ? 'pr-10' : ''}`}
+          aria-describedby={helper ? `${inputId}-help` : undefined}
+        />
+        {disabled && (
+          <LockKeyhole className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden="true" />
+        )}
+      </div>
+      {helper && <p id={`${inputId}-help`} className="ui-help">{helper}</p>}
     </div>
   );
 }

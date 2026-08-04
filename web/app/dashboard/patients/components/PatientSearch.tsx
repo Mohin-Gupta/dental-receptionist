@@ -14,10 +14,12 @@ export default function PatientSearch({
   onSearchStart,
 }: Props) {
   return (
-    <div className="relative w-full md:w-64">
-      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+    <div className="relative w-full md:w-80">
+      <label htmlFor="patient-search" className="sr-only">Search patients by name or phone</label>
+      <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-brand" aria-hidden="true" />
 
       <input
+        id="patient-search"
         type="text"
         placeholder="Search name or phone..."
         value={value}
@@ -27,7 +29,7 @@ export default function PatientSearch({
             e.target.value
           );
         }}
-        className="w-full pl-9 pr-4 py-2 text-sm bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="ui-input pl-10 pr-4 shadow-[0_7px_20px_rgba(19,43,35,0.045)]"
       />
     </div>
   );

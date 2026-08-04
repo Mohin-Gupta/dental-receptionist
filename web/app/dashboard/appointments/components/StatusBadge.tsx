@@ -6,8 +6,7 @@ import {
 } from 'lucide-react';
 
 interface StatusConfigItem {
-  color: string;
-  bg: string;
+  className: string;
   icon: React.ElementType;
 }
 
@@ -16,26 +15,22 @@ const STATUS_CONFIG: Record<
   StatusConfigItem
 > = {
   confirmed: {
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-400/10',
+    className: 'status-success',
     icon: CheckCircle,
   },
 
   scheduled: {
-    color: 'text-blue-400',
-    bg: 'bg-blue-400/10',
+    className: 'status-info',
     icon: Clock,
   },
 
   cancelled: {
-    color: 'text-red-400',
-    bg: 'bg-red-400/10',
+    className: 'status-danger',
     icon: XCircle,
   },
 
   completed: {
-    color: 'text-gray-400',
-    bg: 'bg-gray-400/10',
+    className: 'status-neutral',
     icon: AlertCircle,
   },
 };
@@ -54,18 +49,17 @@ export default function StatusBadge({
   const Icon = config.icon;
 
   return (
-    <div
-      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full ${config.bg} w-fit`}
+    <span
+      className={`status-pill ${config.className}`}
     >
       <Icon
-        className={`w-3 h-3 ${config.color}`}
+        className="h-3 w-3"
+        aria-hidden="true"
       />
 
-      <span
-        className={`text-xs font-medium capitalize ${config.color}`}
-      >
+      <span className="capitalize">
         {status}
       </span>
-    </div>
+    </span>
   );
 }

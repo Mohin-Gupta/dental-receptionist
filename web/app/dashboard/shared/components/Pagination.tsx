@@ -21,30 +21,40 @@ export default function Pagination({
   if (totalPages <= 1) return null;
 
   return (
-    <div className="px-4 sm:px-6 py-4 border-t border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-3">
-      <span className="text-xs text-gray-500 text-center sm:text-left">
-        Page {page} of {totalPages} · {total} records
-      </span>
+    <nav
+      className="flex flex-col items-center justify-between gap-3 border-t border-line bg-[#fbfcfc] px-4 py-4 sm:flex-row sm:px-5"
+      aria-label="Pagination"
+    >
+      <p className="text-center text-[0.7rem] font-medium text-muted sm:text-left" aria-live="polite">
+        Page <span className="font-bold text-ink-soft">{page}</span> of{' '}
+        <span className="font-bold text-ink-soft">{totalPages}</span>
+        <span className="mx-2 text-line-strong" aria-hidden="true">/</span>
+        {total.toLocaleString()} records
+      </p>
 
       <div className="flex gap-2">
         <button
+          type="button"
           onClick={onPrevious}
           disabled={page === 1}
-          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-gray-700 text-gray-300 disabled:opacity-40 hover:bg-gray-800 transition-colors"
+          className="btn-secondary min-h-9 px-3 py-2 text-[0.7rem]"
+          aria-label={`Go to page ${Math.max(1, page - 1)}`}
         >
-          <ChevronLeft className="w-3 h-3" />
+          <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
           Previous
         </button>
 
         <button
+          type="button"
           onClick={onNext}
           disabled={page === totalPages}
-          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-gray-700 text-gray-300 disabled:opacity-40 hover:bg-gray-800 transition-colors"
+          className="btn-secondary min-h-9 px-3 py-2 text-[0.7rem]"
+          aria-label={`Go to page ${Math.min(totalPages, page + 1)}`}
         >
           Next
-          <ChevronRight className="w-3 h-3" />
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
-    </div>
+    </nav>
   );
 }

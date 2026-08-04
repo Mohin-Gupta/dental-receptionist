@@ -2,7 +2,8 @@
 
 import { FormEvent, useState } from 'react';
 import Link from 'next/link';
-import { Loader2, Mail } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Loader2, Mail } from 'lucide-react';
+import AuthShell from '@/components/ui/AuthShell';
 import api from '@/lib/api';
 
 export default function ForgotPasswordPage() {
@@ -22,37 +23,49 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      <form onSubmit={submit} className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6">
-        <Mail className="w-8 h-8 text-blue-400 mb-4" />
-        <h1 className="text-lg font-semibold text-white">Reset password</h1>
-        <p className="text-sm text-gray-400 mt-1 mb-5">
+    <AuthShell>
+      <section className="surface-card rounded-[1.45rem] p-6 shadow-[var(--shadow-md)] sm:p-8" aria-labelledby="forgot-password-title">
+        <span className="flex h-12 w-12 items-center justify-center rounded-[15px] bg-brand-soft text-brand" aria-hidden="true">
+          <Mail className="h-5 w-5" />
+        </span>
+        <p className="mt-6 text-[0.68rem] font-bold uppercase tracking-[0.16em] text-brand">Account recovery</p>
+        <h1 id="forgot-password-title" className="font-display mt-2 text-[2.35rem] leading-[1.04] tracking-[-0.045em] text-ink">
+          Reset your password.
+        </h1>
+        <p className="mt-3 text-sm leading-6 text-muted">
           Enter your email and we will send reset instructions if the account exists.
         </p>
 
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full text-sm bg-gray-800 border border-gray-700 text-gray-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          required
-        />
+        <form onSubmit={submit} className="mt-7" aria-busy={loading}>
+          <label htmlFor="forgot-password-email" className="ui-label">Work email</label>
+          <input
+            id="forgot-password-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="ui-input"
+            autoComplete="email"
+            required
+          />
 
-        {sent && <p className="text-xs text-emerald-400 mt-3">Check your email for a reset link.</p>}
+          {sent && (
+            <div className="alert-success mt-5" role="status" aria-live="polite">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>Check your email for a reset link.</p>
+            </div>
+          )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-5 w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
-        >
-          {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-          Send reset link
-        </button>
+          <button type="submit" disabled={loading} className="btn-primary mt-6 min-h-12 w-full text-sm">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Mail className="h-4 w-4" aria-hidden="true" />}
+            Send reset link
+          </button>
 
-        <Link href="/sign-in" className="block text-center text-xs text-blue-400 hover:text-blue-300 mt-4">
-          Back to sign in
-        </Link>
-      </form>
-    </div>
+          <Link href="/sign-in" className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-brand hover:text-brand-dark">
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+            Back to sign in
+          </Link>
+        </form>
+      </section>
+    </AuthShell>
   );
 }

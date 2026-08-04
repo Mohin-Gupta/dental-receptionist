@@ -1,36 +1,41 @@
 'use client';
-import StatCard, { type StatCardProps,} from './components/StatCard';
+
+import StatCard, { type StatCardProps } from './components/StatCard';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import axios from 'axios';
 import api, { DashboardStats, Appointment, formatTime, nowInTimezone } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import PageHeader from '@/components/ui/PageHeader';
+import SectionCard from '@/components/ui/SectionCard';
+import EmptyState from './shared/components/EmptyState';
+import LoadingState from './shared/components/LoadingState';
 import {
+  Activity,
   Calendar,
+  CalendarClock,
   Users,
   Phone,
-  TrendingUp,
   Clock,
-  CheckCircle,
+  CheckCircle2,
   XCircle,
   AlertCircle,
   ShieldAlert,
+  CalendarDays,
 } from 'lucide-react';
 
 interface StatusConfigItem {
-  color: string;
-  bg: string;
+  className: string;
   icon: React.ElementType;
   label: string;
 }
 
 const STATUS_CONFIG: Record<string, StatusConfigItem> = {
-  confirmed: { color: 'text-emerald-400', bg: 'bg-emerald-400/10', icon: CheckCircle, label: 'Confirmed' },
-  scheduled: { color: 'text-blue-400',    bg: 'bg-blue-400/10',    icon: Clock,        label: 'Scheduled' },
-  cancelled: { color: 'text-red-400',     bg: 'bg-red-400/10',     icon: XCircle,      label: 'Cancelled' },
-  completed: { color: 'text-gray-400',    bg: 'bg-gray-400/10',    icon: AlertCircle,  label: 'Completed' },
+  confirmed: { className: 'status-success', icon: CheckCircle2, label: 'Confirmed' },
+  scheduled: { className: 'status-info', icon: Clock, label: 'Scheduled' },
+  cancelled: { className: 'status-danger', icon: XCircle, label: 'Cancelled' },
+  completed: { className: 'status-neutral', icon: CheckCircle2, label: 'Completed' },
 };
-
 
 export default function DashboardPage() {
   const {
@@ -38,9 +43,9 @@ export default function DashboardPage() {
     activeClinicId,
   } = useAuth();
 
-  const [stats, setStats]   = useState<DashboardStats | null>(null);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError]   = useState('');
+  const [error, setError] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
 
   useEffect(() => {
@@ -72,30 +77,28 @@ export default function DashboardPage() {
   const timezone = stats?.timezone ?? 'Asia/Kolkata';
 
   // Current time displayed in the clinic's timezone, recalculated when timezone loads
-  const [currentTime, setCurrentTime] =
-  useState(nowInTimezone(timezone));
+  const [currentTime, setCurrentTime] = useState(nowInTimezone(timezone));
 
-useEffect(() => {
-  setCurrentTime(
-    nowInTimezone(timezone)
-  );
+  useEffect(() => {
+    setCurrentTime(nowInTimezone(timezone));
 
-  const interval = setInterval(() => {
-    setCurrentTime(
-      nowInTimezone(timezone)
-    );
-  }, 1000);
+    const interval = setInterval(() => {
+      setCurrentTime(nowInTimezone(timezone));
+    }, 1000);
 
-  return () =>
-    clearInterval(interval);
-}, [timezone]);
+    return () => clearInterval(interval);
+  }, [timezone]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-gray-400 text-sm">Loading dashboard...</p>
+      <div className="page-shell">
+        <div className="mb-7 space-y-3" aria-hidden="true">
+          <div className="skeleton h-3 w-28" />
+          <div className="skeleton h-10 w-56" />
+          <div className="skeleton h-4 w-72 max-w-full" />
+        </div>
+        <div className="surface-card">
+          <LoadingState height="min-h-[420px]" label="Preparing today’s overview" />
         </div>
       </div>
     );
@@ -103,119 +106,205 @@ useEffect(() => {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center max-w-sm px-4">
-          {mfaRequired ? (
-            <ShieldAlert className="w-8 h-8 text-amber-400 mx-auto mb-2" />
-          ) : (
-            <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
-          )}
-          <p className="text-gray-400 text-sm">{error}</p>
-          {mfaRequired && (
-            <Link
-              href="/mfa"
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Go to MFA setup
-            </Link>
-          )}
+      <div className="page-shell">
+        <PageHeader
+          eyebrow="Daily operations"
+          title="Overview"
+          description="A current view of your clinic’s appointments, patients, and calls."
+          icon={Activity}
+        />
+        <div className="surface-card flex min-h-[420px] items-center justify-center p-6" role="alert">
+          <div className="max-w-md text-center">
+            <span className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border ${
+              mfaRequired
+                ? 'border-[#efddb7] bg-warning-soft text-warning'
+                : 'border-[#efd0cc] bg-danger-soft text-danger'
+            }`}>
+              {mfaRequired ? (
+                <ShieldAlert className="h-6 w-6" aria-hidden="true" />
+              ) : (
+                <AlertCircle className="h-6 w-6" aria-hidden="true" />
+              )}
+            </span>
+            <h2 className="mt-5 text-base font-semibold text-ink">
+              {mfaRequired ? 'Security check required' : 'Overview unavailable'}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">{error}</p>
+            {mfaRequired && (
+              <Link href="/mfa" className="btn-primary mt-5">
+                <ShieldAlert className="h-4 w-4" aria-hidden="true" />
+                Go to MFA setup
+              </Link>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
   const statCards: StatCardProps[] = [
-    { label: "Today's appointments", value: stats?.todayAppointments ?? 0,  icon: Calendar,    color: 'text-blue-400',   bg: 'bg-blue-400/10',   border: 'border-blue-400/20' },
-    { label: 'Upcoming',             value: stats?.upcomingAppointments ?? 0, icon: TrendingUp, color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20' },
-    { label: 'Total patients',       value: stats?.totalPatients ?? 0,       icon: Users,       color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20' },
-    { label: 'Calls today',          value: stats?.callsToday ?? 0,          icon: Phone,       color: 'text-orange-400', bg: 'bg-orange-400/10', border: 'border-orange-400/20' },
+    {
+      label: "Today's appointments",
+      value: stats?.todayAppointments ?? 0,
+      icon: Calendar,
+      tone: 'brand',
+      context: 'Scheduled for today',
+    },
+    {
+      label: 'Upcoming',
+      value: stats?.upcomingAppointments ?? 0,
+      icon: CalendarClock,
+      tone: 'info',
+      context: 'Future bookings',
+    },
+    {
+      label: 'Total patients',
+      value: stats?.totalPatients ?? 0,
+      icon: Users,
+      tone: 'success',
+      context: 'Patient records',
+    },
+    {
+      label: 'Calls today',
+      value: stats?.callsToday ?? 0,
+      icon: Phone,
+      tone: 'warm',
+      context: 'Handled since midnight',
+    },
   ];
 
   return (
-    <div className="p-4 md:p-6 lg:p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">Overview</h1>
-        {/* Date and time shown in clinic's own timezone */}
-        <p className="text-gray-400 text-sm mt-1">
-          {currentTime.formatted} · {currentTime.time}
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
-        {statCards.map(card => <StatCard key={card.label} {...card} />)}
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-        <div className="bg-gray-900 rounded-xl border border-gray-800/50 p-5 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center">
-            <CheckCircle className="w-5 h-5 text-gray-400" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Past appointments</p>
-            <p className="text-2xl font-bold text-gray-300">{stats?.pastAppointments ?? 0}</p>
-          </div>
-        </div>
-
-        <div className="bg-gray-900 rounded-xl border border-gray-800/50 p-5 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
-            <XCircle className="w-5 h-5 text-red-400" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Cancelled</p>
-            <p className="text-2xl font-bold text-red-400">{stats?.cancelledAppointments ?? 0}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-4 md:px-6 py-4 border-b border-gray-800 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-          <h2 className="text-sm font-semibold text-white">Today&apos;s Schedule</h2>
-          <span className="text-xs text-gray-400">{stats?.todayAppointmentsList?.length ?? 0} appointments</span>
-        </div>
-
-        {!stats?.todayAppointmentsList?.length ? (
-          <div className="px-6 py-16 text-center">
-            <Calendar className="w-8 h-8 text-gray-700 mx-auto mb-3" />
-            <p className="text-sm text-gray-500">No appointments scheduled for today</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-800">
-            {stats.todayAppointmentsList.map((appt: Appointment) => {
-              const config     = STATUS_CONFIG[appt.status] ?? STATUS_CONFIG.completed;
-              const StatusIcon = config.icon;
-
-              return (
-                <div key={appt.id} className="p-4 md:px-6 md:py-4 hover:bg-gray-800/50 transition-colors">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-blue-600/20 flex items-center justify-center">
-                        <span className="text-blue-400 text-sm font-semibold">
-                          {appt.patient.name.charAt(0).toUpperCase()}
-                        </span>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-white">{appt.patient.name}</p>
-                        <p className="text-xs text-gray-400">{appt.reason}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-                      {/* Time formatted in clinic's timezone — not hardcoded IST */}
-                      <span className="text-sm font-medium text-white">
-                        {formatTime(appt.startAt, timezone)}
-                      </span>
-
-                      <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full ${config.bg}`}>
-                        <StatusIcon className={`w-3 h-3 ${config.color}`} />
-                        <span className={`text-xs font-medium ${config.color}`}>{config.label}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+    <div className="page-shell">
+      <PageHeader
+        eyebrow="Daily operations"
+        title="Overview"
+        icon={Activity}
+        description={(
+          <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{currentTime.formatted}</span>
+            <span className="h-1 w-1 rounded-full bg-[#a5b2ad]" aria-hidden="true" />
+            <span className="font-semibold text-ink-soft">{currentTime.time}</span>
+            <span className="text-muted">in your clinic timezone</span>
+          </span>
         )}
+      />
+
+      <section aria-labelledby="clinic-pulse-heading">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <p className="section-kicker">Clinic pulse</p>
+            <h2 id="clinic-pulse-heading" className="mt-1 text-sm font-semibold text-ink">
+              Today’s operating picture
+            </h2>
+          </div>
+          <span className="status-pill status-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+            Current
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {statCards.map(card => <StatCard key={card.label} {...card} />)}
+        </div>
+      </section>
+
+      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.38fr)]">
+        <SectionCard
+          title="Today’s schedule"
+          description="Appointments arranged in your clinic’s local time."
+          eyebrow="Patient flow"
+          icon={CalendarDays}
+          className="min-w-0"
+          contentClassName="p-0 sm:p-0"
+          action={(
+            <span className="status-pill status-neutral">
+              {stats?.todayAppointmentsList?.length ?? 0} appointment{stats?.todayAppointmentsList?.length === 1 ? '' : 's'}
+            </span>
+          )}
+        >
+          {!stats?.todayAppointmentsList?.length ? (
+            <EmptyState
+              icon={Calendar}
+              title="A clear schedule"
+              message="No appointments are scheduled for today. New bookings will appear here automatically."
+            />
+          ) : (
+            <div className="divide-y divide-[#e7ecea]">
+              {stats.todayAppointmentsList.map((appt: Appointment) => {
+                const config = STATUS_CONFIG[appt.status] ?? STATUS_CONFIG.completed;
+                const StatusIcon = config.icon;
+
+                return (
+                  <article
+                    key={appt.id}
+                    className="group grid gap-3 px-4 py-4 transition-colors hover:bg-[#fafcfb] sm:grid-cols-[5.6rem_minmax(0,1fr)_auto] sm:items-center sm:px-5"
+                  >
+                    <div className="flex items-center gap-2 sm:block">
+                      <p className="text-sm font-bold tracking-[-0.02em] text-ink">
+                        {formatTime(appt.startAt, timezone)}
+                      </p>
+                      <p className="text-[0.62rem] font-semibold uppercase tracking-[0.1em] text-muted sm:mt-1">
+                        Local time
+                      </p>
+                    </div>
+
+                    <div className="flex min-w-0 items-center gap-3 border-l-0 border-[#d8e2de] sm:border-l sm:pl-5">
+                      <div className="avatar h-10 w-10 text-sm">
+                        {appt.patient.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-ink">{appt.patient.name}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted">{appt.reason}</p>
+                      </div>
+                    </div>
+
+                    <div className={`status-pill ${config.className}`}>
+                      <StatusIcon className="h-3 w-3" aria-hidden="true" />
+                      {config.label}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </SectionCard>
+
+        <aside className="surface-card overflow-hidden" aria-labelledby="history-heading">
+          <div className="border-b border-line px-5 py-[1.2rem]">
+            <p className="section-kicker">Appointment history</p>
+            <h2 id="history-heading" className="mt-1 text-[0.95rem] font-bold tracking-[-0.018em] text-ink">
+              Current totals
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-2 divide-x divide-line xl:grid-cols-1 xl:divide-x-0 xl:divide-y">
+            <div className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#d5e5df] bg-surface-subtle text-muted">
+                  <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="text-[0.62rem] font-bold uppercase tracking-[0.11em] text-muted">Past</span>
+              </div>
+              <p className="mt-5 text-3xl font-semibold tracking-[-0.055em] text-ink">
+                {(stats?.pastAppointments ?? 0).toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted">Appointments already elapsed</p>
+            </div>
+
+            <div className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#efd4d0] bg-danger-soft text-danger">
+                  <XCircle className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="text-[0.62rem] font-bold uppercase tracking-[0.11em] text-danger">Cancelled</span>
+              </div>
+              <p className="mt-5 text-3xl font-semibold tracking-[-0.055em] text-ink">
+                {(stats?.cancelledAppointments ?? 0).toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted">Bookings marked as cancelled</p>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   );

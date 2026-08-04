@@ -26,9 +26,13 @@ import api, {
   type BillingSummary,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import PageHeader from '@/components/ui/PageHeader';
+import SectionCard from '@/components/ui/SectionCard';
+import LoadingState from '../shared/components/LoadingState';
+import EmptyState from '../shared/components/EmptyState';
 
-const inputClass =
-  'w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500';
+const inputClass = 'ui-input mt-2';
+const selectClass = 'ui-select mt-2';
 const PAGE_LIMIT = 25;
 const CLINIC_NOTICE_KEY = 'organization-control-clinic-created';
 
@@ -501,270 +505,332 @@ export default function OrganizationPage() {
 
   if (organizationRole !== 'owner') {
     return (
-      <div className="p-8">
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-8 text-center">
-          <ShieldAlert className="mx-auto h-8 w-8 text-gray-600" />
-          <h1 className="mt-3 text-lg font-semibold text-white">Organization owner access required</h1>
-          <p className="mt-1 text-sm text-gray-500">Only an organization owner can manage tenant members, invitations, and clinic locations.</p>
+      <div className="page-shell">
+        <div className="surface-card flex min-h-[430px] items-center justify-center p-8 text-center">
+          <div className="max-w-md">
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-[#d7e3df] bg-surface-subtle text-muted">
+              <ShieldAlert className="h-6 w-6" aria-hidden="true" />
+            </span>
+            <h1 className="mt-5 text-xl font-semibold tracking-[-0.03em] text-ink">Organization owner access required</h1>
+            <p className="mt-2 text-sm leading-6 text-muted">Only an organization owner can manage tenant members, invitations, and clinic locations.</p>
+          </div>
         </div>
       </div>
     );
   }
 
   if (loading) {
-    return <div className="flex h-screen items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-500" /></div>;
+    return (
+      <div className="page-shell">
+        <div className="surface-card">
+          <LoadingState height="min-h-[520px]" label="Loading organization controls" />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="p-4 md:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Organization</h1>
-          <p className="mt-1 text-sm text-gray-400">Manage tenant access, pending invitations, and subscription-controlled locations.</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={busy !== null}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 disabled:opacity-50"
-        >
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </button>
-      </div>
+    <div className="page-shell">
+      <PageHeader
+        eyebrow="Tenant administration"
+        title="Organization"
+        description="Manage people, clinic locations, and subscription-controlled access from one secure workspace."
+        icon={UsersRound}
+        actions={(
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={busy !== null}
+            className="btn-secondary"
+          >
+            <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} aria-hidden="true" />
+            Refresh
+          </button>
+        )}
+      />
 
       {notice && (
-        <div className="mb-5 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-200">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> {notice}
+        <div className="alert-success mb-5" role="status" aria-live="polite">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{notice}</span>
         </div>
       )}
       {error && (
-        <div className="mb-5 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
-          <div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}</div>
-          {mfaAction && (
-            <Link href="/mfa" className="mt-2 inline-block font-medium text-blue-300 hover:text-blue-200">
-              {mfaAction === 'setup' ? 'Set up MFA' : 'Verify with MFA'}
-            </Link>
-          )}
-          {paymentRequired && (
-            <Link href="/dashboard/billing" className="mt-2 ml-4 inline-block font-medium text-blue-300 hover:text-blue-200">Review plan</Link>
-          )}
+        <div className="alert-error mb-5" role="alert">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <div>
+            <p>{error}</p>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+              {mfaAction && (
+                <Link href="/mfa" className="font-bold text-danger underline decoration-danger/25 underline-offset-4 hover:decoration-danger">
+                  {mfaAction === 'setup' ? 'Set up MFA' : 'Verify with MFA'}
+                </Link>
+              )}
+              {paymentRequired && (
+                <Link href="/dashboard/billing" className="font-bold text-danger underline decoration-danger/25 underline-offset-4 hover:decoration-danger">
+                  Review plan
+                </Link>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <UsersRound className="h-5 w-5 text-blue-400" />
-          <p className="mt-3 text-2xl font-semibold text-white">{total}</p>
-          <p className="mt-1 text-xs text-gray-500">Members with tenant access</p>
-        </section>
-        <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <MailPlus className="h-5 w-5 text-blue-400" />
-          <p className="mt-3 text-2xl font-semibold text-white">{pendingInvites.length}</p>
-          <p className="mt-1 text-xs text-gray-500">Pending invitations</p>
-        </section>
-        <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <Building2 className="h-5 w-5 text-blue-400" />
-          <p className="mt-3 text-2xl font-semibold text-white">
-            {organizationClinics.length}{clinicLimit !== null ? ` / ${clinicLimit}` : ''}
-          </p>
-          <p className="mt-1 text-xs text-gray-500">Clinics used under clinics.max</p>
-        </section>
+        <article className="surface-card relative overflow-hidden p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-[0.68rem] font-bold uppercase tracking-[0.12em] text-muted">Members</p>
+              <p className="mt-3 text-3xl font-semibold tracking-[-0.055em] text-ink">{total.toLocaleString()}</p>
+              <p className="mt-1 text-xs text-muted">With tenant access</p>
+            </div>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#cfe5de] bg-brand-softer text-brand">
+              <UsersRound className="h-[1.05rem] w-[1.05rem]" aria-hidden="true" />
+            </span>
+          </div>
+        </article>
+        <article className="surface-card relative overflow-hidden p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-[0.68rem] font-bold uppercase tracking-[0.12em] text-muted">Invitations</p>
+              <p className="mt-3 text-3xl font-semibold tracking-[-0.055em] text-ink">{pendingInvites.length.toLocaleString()}</p>
+              <p className="mt-1 text-xs text-muted">Waiting for acceptance</p>
+            </div>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#cee1e7] bg-info-soft text-info">
+              <MailPlus className="h-[1.05rem] w-[1.05rem]" aria-hidden="true" />
+            </span>
+          </div>
+        </article>
+        <article className="surface-card relative overflow-hidden p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-[0.68rem] font-bold uppercase tracking-[0.12em] text-muted">Clinic capacity</p>
+              <p className="mt-3 text-3xl font-semibold tracking-[-0.055em] text-ink">
+                {organizationClinics.length}{clinicLimit !== null ? ` / ${clinicLimit}` : ''}
+              </p>
+              <p className="mt-1 text-xs text-muted">Locations in use</p>
+            </div>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#eadfca] bg-warning-soft text-warning">
+              <Building2 className="h-[1.05rem] w-[1.05rem]" aria-hidden="true" />
+            </span>
+          </div>
+        </article>
       </div>
 
-      <section className="mb-5 overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
-        <div className="border-b border-gray-800 p-5">
-          <h2 className="font-semibold text-white">Clinic lifecycle</h2>
-          <p className="mt-1 text-xs text-gray-500">
-            Archived clinics retain their records but cannot receive calls, messages, appointments, or member traffic.
-          </p>
-        </div>
-        <div className="divide-y divide-gray-800">
-          {managedClinics.map(item => (
-            <div key={item.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-medium text-gray-200">{item.name}</p>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${
-                    item.status === 'active'
-                      ? 'bg-emerald-500/10 text-emerald-300'
-                      : 'bg-gray-800 text-gray-400'
-                  }`}>
-                    {item.status}
+      <SectionCard
+        title="Clinic lifecycle"
+        description="Archived clinics retain their records but cannot receive calls, messages, appointments, or member traffic."
+        eyebrow="Locations"
+        icon={Building2}
+        className="mb-5"
+        contentClassName="p-0 sm:p-0"
+      >
+        {managedClinics.length === 0 ? (
+          <EmptyState icon={Building2} title="No clinic locations" message="Clinic locations will appear here once they are created." compact />
+        ) : (
+          <div className="divide-y divide-[#e7ecea]">
+            {managedClinics.map(item => (
+              <article key={item.id} className="flex flex-col gap-4 p-4 transition-colors hover:bg-[#fafcfb] sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#d5e4df] bg-surface-subtle text-brand">
+                    <Building2 className="h-4 w-4" aria-hidden="true" />
                   </span>
-                  {item.id === activeClinicId && (
-                    <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-300">Selected</span>
-                  )}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-semibold text-ink">{item.name}</h3>
+                      <span className={`status-pill capitalize ${item.status === 'active' ? 'status-success' : 'status-neutral'}`}>
+                        {item.status}
+                      </span>
+                      {item.id === activeClinicId && <span className="status-pill status-info">Selected</span>}
+                    </div>
+                    <p className="mt-1.5 text-xs leading-5 text-muted">
+                      {item.phone} · {item.timezone} · {item._count.memberships} member assignment{item._count.memberships === 1 ? '' : 's'}
+                      {item.status === 'active' && ` · ${item._count.appointments} future appointment${item._count.appointments === 1 ? '' : 's'}`}
+                    </p>
+                  </div>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">
-                  {item.phone} · {item.timezone} · {item._count.memberships} member assignment{item._count.memberships === 1 ? '' : 's'}
-                  {item.status === 'active' && ` · ${item._count.appointments} future appointment${item._count.appointments === 1 ? '' : 's'}`}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void changeClinicStatus(item)}
-                disabled={busy !== null}
-                className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
-                  item.status === 'active'
-                    ? 'border-amber-500/20 text-amber-300 hover:bg-amber-500/10'
-                    : 'border-emerald-500/20 text-emerald-300 hover:bg-emerald-500/10'
-                }`}
-              >
-                {busy === `clinic-status-${item.id}` ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : item.status === 'active' ? (
-                  <Archive className="h-3.5 w-3.5" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                )}
-                {item.status === 'active' ? 'Archive' : 'Restore'}
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+                <button
+                  type="button"
+                  onClick={() => void changeClinicStatus(item)}
+                  disabled={busy !== null}
+                  className={`inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    item.status === 'active'
+                      ? 'border-[#ecd9b8] bg-warning-soft text-warning hover:border-[#dfc68f]'
+                      : 'border-[#cce7dc] bg-success-soft text-success hover:border-[#acd9c8]'
+                  }`}
+                >
+                  {busy === `clinic-status-${item.id}` ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : item.status === 'active' ? (
+                    <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {item.status === 'active' ? 'Archive' : 'Restore'}
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       <div className="mb-5 grid gap-5 xl:grid-cols-2">
-        <form onSubmit={sendInvite} className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center gap-2"><MailPlus className="h-4 w-4 text-blue-400" /><h2 className="font-semibold text-white">Invite a member</h2></div>
-          <p className="mt-1 text-xs text-gray-500">Access is granted only after the recipient authenticates and accepts the invitation.</p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs text-gray-400 sm:col-span-2">Email
-              <input type="email" value={invite.email} onChange={event => setInvite(current => ({ ...current, email: event.target.value }))} autoComplete="email" className={`${inputClass} mt-1.5`} required />
-            </label>
-            <label className="text-xs text-gray-400">Access scope
-              <select value={invite.scope} onChange={event => setInvite(current => ({ ...current, scope: event.target.value as 'organization' | 'clinic' }))} className={`${inputClass} mt-1.5`}>
-                <option value="clinic">One clinic</option><option value="organization">Entire organization</option>
-              </select>
-            </label>
-            {invite.scope === 'organization' ? (
-              <label className="text-xs text-gray-400">Organization role
-                <select value={invite.organizationRole} onChange={event => setInvite(current => ({ ...current, organizationRole: event.target.value as typeof current.organizationRole }))} className={`${inputClass} mt-1.5`}>
-                  <option value="viewer">Viewer</option><option value="admin">Admin</option>
-                </select>
-                <span className="mt-1 block font-normal text-gray-600">Owner access can be granted after acceptance through an MFA-protected role change.</span>
+        <form onSubmit={sendInvite}>
+          <SectionCard
+            title="Invite a member"
+            description="Access begins only after the recipient authenticates and accepts."
+            eyebrow="People"
+            icon={MailPlus}
+            className="h-full"
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="ui-label sm:col-span-2">Email
+                <input type="email" value={invite.email} onChange={event => setInvite(current => ({ ...current, email: event.target.value }))} autoComplete="email" className={inputClass} required />
               </label>
-            ) : (
-              <>
-                <label className="text-xs text-gray-400">Clinic
-                  <select value={invite.clinicId} onChange={event => setInvite(current => ({ ...current, clinicId: event.target.value }))} className={`${inputClass} mt-1.5`} required>
-                    {organizationClinics.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+              <label className="ui-label">Access scope
+                <select value={invite.scope} onChange={event => setInvite(current => ({ ...current, scope: event.target.value as 'organization' | 'clinic' }))} className={selectClass}>
+                  <option value="clinic">One clinic</option><option value="organization">Entire organization</option>
+                </select>
+              </label>
+              {invite.scope === 'organization' ? (
+                <label className="ui-label">Organization role
+                  <select value={invite.organizationRole} onChange={event => setInvite(current => ({ ...current, organizationRole: event.target.value as typeof current.organizationRole }))} className={selectClass}>
+                    <option value="viewer">Viewer</option><option value="admin">Admin</option>
                   </select>
+                  <span className="ui-help block font-normal">Owner access can be granted after acceptance through an MFA-protected role change.</span>
                 </label>
-                <label className="text-xs text-gray-400 sm:col-span-2">Clinic role
-                  <select value={invite.clinicRole} onChange={event => setInvite(current => ({ ...current, clinicRole: event.target.value as typeof current.clinicRole }))} className={`${inputClass} mt-1.5`}>
-                    <option value="viewer">Viewer</option><option value="staff">Staff</option><option value="admin">Admin</option>
-                  </select>
-                </label>
-              </>
-            )}
-          </div>
-          <button type="submit" disabled={busy !== null || (invite.scope === 'clinic' && organizationClinics.length === 0)} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-            {busy === 'invite' && <Loader2 className="h-4 w-4 animate-spin" />} Send invitation
-          </button>
+              ) : (
+                <>
+                  <label className="ui-label">Clinic
+                    <select value={invite.clinicId} onChange={event => setInvite(current => ({ ...current, clinicId: event.target.value }))} className={selectClass} required>
+                      {organizationClinics.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="ui-label sm:col-span-2">Clinic role
+                    <select value={invite.clinicRole} onChange={event => setInvite(current => ({ ...current, clinicRole: event.target.value as typeof current.clinicRole }))} className={selectClass}>
+                      <option value="viewer">Viewer</option><option value="staff">Staff</option><option value="admin">Admin</option>
+                    </select>
+                  </label>
+                </>
+              )}
+            </div>
+            <button type="submit" disabled={busy !== null || (invite.scope === 'clinic' && organizationClinics.length === 0)} className="btn-primary mt-5 w-full">
+              {busy === 'invite' && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />} Send invitation
+            </button>
+          </SectionCard>
         </form>
 
-        <form onSubmit={createClinic} className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-blue-400" /><h2 className="font-semibold text-white">Create a clinic</h2></div>
-          <p className="mt-1 text-xs text-gray-500">
-            {canCreateClinic
+        <form onSubmit={createClinic}>
+          <SectionCard
+            title="Create a clinic"
+            description={canCreateClinic
               ? `${clinicLimit! - organizationClinics.length} location slot${clinicLimit! - organizationClinics.length === 1 ? '' : 's'} remaining on this plan.`
               : 'An active subscription with available clinics.max capacity is required.'}
-          </p>
-          {billingLoadError && <p className="mt-2 text-xs text-amber-300">{billingLoadError}</p>}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs text-gray-400 sm:col-span-2">Clinic name
-              <input value={clinic.name} onChange={event => setClinic(current => ({ ...current, name: event.target.value }))} minLength={2} maxLength={160} className={`${inputClass} mt-1.5`} required />
-            </label>
-            <label className="text-xs text-gray-400">Country
-              <select value={clinic.countryCode} onChange={event => selectCountry(event.target.value)} className={`${inputClass} mt-1.5`}>
-                {countryOptions.map(option => <option key={option.countryCode} value={option.countryCode}>{option.label}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-gray-400">Phone
-              <input type="tel" value={clinic.phone} onChange={event => setClinic(current => ({ ...current, phone: event.target.value }))} placeholder={`+${clinic.defaultCallingCode} ...`} autoComplete="tel" minLength={7} maxLength={30} className={`${inputClass} mt-1.5`} required />
-            </label>
-            <label className="text-xs text-gray-400 sm:col-span-2">Timezone
-              <input value={clinic.timezone} onChange={event => setClinic(current => ({ ...current, timezone: event.target.value }))} maxLength={100} className={`${inputClass} mt-1.5`} required />
-            </label>
-          </div>
-          <button type="submit" disabled={busy !== null || !canCreateClinic} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-            {busy === 'clinic' && <Loader2 className="h-4 w-4 animate-spin" />} Create clinic
-          </button>
-          {!canCreateClinic && <Link href="/dashboard/billing" className="mt-3 block text-center text-xs font-medium text-blue-400 hover:text-blue-300">Review subscription and clinic capacity</Link>}
+            eyebrow="Locations"
+            icon={Building2}
+            className="h-full"
+          >
+            {billingLoadError && <div className="alert-warning mb-4"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />{billingLoadError}</div>}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="ui-label sm:col-span-2">Clinic name
+                <input value={clinic.name} onChange={event => setClinic(current => ({ ...current, name: event.target.value }))} minLength={2} maxLength={160} className={inputClass} required />
+              </label>
+              <label className="ui-label">Country
+                <select value={clinic.countryCode} onChange={event => selectCountry(event.target.value)} className={selectClass}>
+                  {countryOptions.map(option => <option key={option.countryCode} value={option.countryCode}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="ui-label">Phone
+                <input type="tel" value={clinic.phone} onChange={event => setClinic(current => ({ ...current, phone: event.target.value }))} placeholder={`+${clinic.defaultCallingCode} ...`} autoComplete="tel" minLength={7} maxLength={30} className={inputClass} required />
+              </label>
+              <label className="ui-label sm:col-span-2">Timezone
+                <input value={clinic.timezone} onChange={event => setClinic(current => ({ ...current, timezone: event.target.value }))} maxLength={100} className={inputClass} required />
+              </label>
+            </div>
+            <button type="submit" disabled={busy !== null || !canCreateClinic} className="btn-primary mt-5 w-full">
+              {busy === 'clinic' && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />} Create clinic
+            </button>
+            {!canCreateClinic && <Link href="/dashboard/billing" className="mt-3 block text-center text-xs font-bold text-brand hover:text-brand-dark">Review subscription and clinic capacity</Link>}
+          </SectionCard>
         </form>
       </div>
 
-      <section className="mb-5 overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
-        <div className="border-b border-gray-800 p-5">
-          <h2 className="font-semibold text-white">Pending invitations</h2>
-          <p className="mt-1 text-xs text-gray-500">Expired invitations are excluded automatically.</p>
-        </div>
+      <SectionCard
+        title="Pending invitations"
+        description="Expired invitations are excluded automatically."
+        eyebrow="Access queue"
+        icon={MailPlus}
+        className="mb-5"
+        contentClassName="p-0 sm:p-0"
+      >
         {pendingInvites.length === 0 ? (
-          <p className="p-6 text-sm text-gray-500">No pending invitations.</p>
+          <EmptyState icon={MailPlus} title="No pending invitations" message="New invitations awaiting acceptance will be listed here." compact />
         ) : (
-          <div className="divide-y divide-gray-800">
+          <div className="divide-y divide-[#e7ecea]">
             {pendingInvites.map(pending => (
-              <div key={pending.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-200">{pending.email}</p>
-                  <p className="mt-1 text-xs text-gray-500">
+              <article key={pending.id} className="flex flex-col gap-3 p-4 transition-colors hover:bg-[#fafcfb] sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-ink">{pending.email}</p>
+                    <span className="status-pill status-warning">Pending</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-muted">
                     {pending.organizationRole
                       ? `${roleLabel(pending.organizationRole)} · Entire organization`
                       : `${roleLabel(pending.clinicRole)} · ${organizationClinics.find(item => item.id === pending.clinicId)?.name ?? 'Clinic'}`}
                     {' · '}Expires {formatDate(pending.expiresAt)}
                   </p>
                 </div>
-                <button type="button" onClick={() => void cancelInvite(pending)} disabled={busy !== null} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-500/20 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50">
-                  {busy === `invite-${pending.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Cancel invite
+                <button type="button" onClick={() => void cancelInvite(pending)} disabled={busy !== null} className="btn-danger-soft min-h-9 shrink-0 px-3 py-2 text-[0.7rem]">
+                  {busy === `invite-${pending.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />} Cancel invite
                 </button>
-              </div>
+              </article>
             ))}
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
-        <div className="flex flex-col gap-3 border-b border-gray-800 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="font-semibold text-white">Members</h2>
-            <p className="mt-1 text-xs text-gray-500">Role changes and removals require a recently verified MFA session.</p>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-gray-500"><ShieldCheck className="h-4 w-4" /> Tenant-scoped access</div>
-        </div>
+      <SectionCard
+        title="Members"
+        description="Role changes and removals require a recently verified MFA session."
+        eyebrow="Access directory"
+        icon={UsersRound}
+        contentClassName="p-0 sm:p-0"
+        action={<span className="status-pill status-success"><ShieldCheck className="h-3 w-3" aria-hidden="true" />Tenant scoped</span>}
+      >
         {members.length === 0 ? (
-          <p className="p-8 text-center text-sm text-gray-500">No members found on this page.</p>
+          <EmptyState icon={UsersRound} title="No members on this page" message="Tenant members will appear here as access is granted." compact />
         ) : (
-          <div className="divide-y divide-gray-800">
+          <div className="divide-y divide-[#e7ecea]">
             {members.map(member => {
               const draft = drafts[member.id] ?? memberDraft(member);
               const isCurrentUser = member.id === user?.id;
               return (
-                <div key={member.id} className="p-5">
+                <article key={member.id} className="p-4 transition-colors hover:bg-[#fafcfb] sm:p-5">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-sm font-semibold text-gray-300">{member.name.charAt(0).toUpperCase()}</div>
-                      <div>
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <div className="avatar h-10 w-10 text-sm">{member.name.charAt(0).toUpperCase()}</div>
+                      <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-medium text-gray-200">{member.name}</p>
-                          {isCurrentUser && <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-300">You</span>}
-                          {member.mfaRequired && <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">MFA required</span>}
+                          <h3 className="text-sm font-semibold text-ink">{member.name}</h3>
+                          {isCurrentUser && <span className="status-pill status-info">You</span>}
+                          {member.mfaRequired && <span className="status-pill status-success">MFA required</span>}
                         </div>
-                        <p className="mt-1 text-xs text-gray-500">{member.email} · {roleLabel(member.organizationRole)} · {member.status}</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-muted">{member.email} · {roleLabel(member.organizationRole)} · {member.status}</p>
                       </div>
                     </div>
-                    <UserCog className="hidden h-5 w-5 text-gray-600 sm:block" />
+                    <UserCog className="hidden h-5 w-5 text-[#9ba8a3] sm:block" aria-hidden="true" />
                   </div>
 
-                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <label className="text-xs text-gray-400">Organization role
-                      <select value={draft.organizationRole} onChange={event => updateDraftOrganizationRole(member.id, event.target.value as AuthRole | '')} disabled={isCurrentUser || busy !== null} className={`${inputClass} mt-1.5 disabled:opacity-50`}>
+                  <div className="surface-card-soft mt-4 grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+                    <label className="ui-label">Organization role
+                      <select value={draft.organizationRole} onChange={event => updateDraftOrganizationRole(member.id, event.target.value as AuthRole | '')} disabled={isCurrentUser || busy !== null} className={selectClass}>
                         <option value="">No organization role</option><option value="viewer">Viewer</option><option value="staff">Staff</option><option value="admin">Admin</option><option value="owner">Owner</option>
                       </select>
                     </label>
                     {organizationClinics.map(item => (
-                      <label key={item.id} className="text-xs text-gray-400">{item.name}
-                        <select value={draft.clinicRoles[item.id] ?? ''} onChange={event => updateDraftClinicRole(member.id, item.id, event.target.value as AuthRole | '')} disabled={isCurrentUser || busy !== null} className={`${inputClass} mt-1.5 disabled:opacity-50`}>
+                      <label key={item.id} className="ui-label">{item.name}
+                        <select value={draft.clinicRoles[item.id] ?? ''} onChange={event => updateDraftClinicRole(member.id, item.id, event.target.value as AuthRole | '')} disabled={isCurrentUser || busy !== null} className={selectClass}>
                           <option value="">No clinic role</option><option value="viewer">Viewer</option><option value="staff">Staff</option><option value="admin">Admin</option><option value="owner">Owner</option>
                         </select>
                       </label>
@@ -773,32 +839,32 @@ export default function OrganizationPage() {
 
                   <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
                     {isCurrentUser ? (
-                      <p className="text-xs text-gray-500">Another organization owner must change or remove your access.</p>
+                      <p className="rounded-lg bg-surface-subtle px-3 py-2 text-xs text-muted">Another organization owner must change or remove your access.</p>
                     ) : (
                       <>
-                        <button type="button" onClick={() => void removeMember(member)} disabled={busy !== null} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-500/20 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50">
-                          {busy === `remove-${member.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Remove tenant access
+                        <button type="button" onClick={() => void removeMember(member)} disabled={busy !== null} className="btn-danger-soft min-h-9 px-3 py-2 text-[0.7rem]">
+                          {busy === `remove-${member.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />} Remove tenant access
                         </button>
-                        <button type="button" onClick={() => void saveMember(member)} disabled={busy !== null} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                          {busy === `member-${member.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save access
+                        <button type="button" onClick={() => void saveMember(member)} disabled={busy !== null} className="btn-primary min-h-9 px-3 py-2 text-[0.7rem]">
+                          {busy === `member-${member.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />} Save access
                         </button>
                       </>
                     )}
                   </div>
-                </div>
+                </article>
               );
             })}
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-gray-800 p-4">
-          <p className="text-xs text-gray-500">Page {page} of {totalPages}</p>
+        <nav className="flex items-center justify-between border-t border-line bg-[#fbfcfc] p-4" aria-label="Member pages">
+          <p className="text-[0.7rem] font-medium text-muted">Page <span className="font-bold text-ink-soft">{page}</span> of <span className="font-bold text-ink-soft">{totalPages}</span></p>
           <div className="flex gap-2">
-            <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || busy !== null} aria-label="Previous member page" className="rounded-lg border border-gray-700 p-2 text-gray-400 hover:bg-gray-800 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
-            <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || busy !== null} aria-label="Next member page" className="rounded-lg border border-gray-700 p-2 text-gray-400 hover:bg-gray-800 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
+            <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || busy !== null} aria-label="Previous member page" className="icon-button border border-line bg-white disabled:opacity-40"><ChevronLeft className="h-4 w-4" aria-hidden="true" /></button>
+            <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || busy !== null} aria-label="Next member page" className="icon-button border border-line bg-white disabled:opacity-40"><ChevronRight className="h-4 w-4" aria-hidden="true" /></button>
           </div>
-        </div>
-      </section>
+        </nav>
+      </SectionCard>
     </div>
   );
 }
