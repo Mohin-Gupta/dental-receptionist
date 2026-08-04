@@ -17,7 +17,19 @@ export async function checkAvailability(
 ): Promise<ToolResponse> {
   const timezone = await getClinicTimezone(clinicId);
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  const doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
+  let doctor;
+  try {
+    doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
+  } catch {
+    // A stale or invalid doctorId (e.g. carried over after the doctor's
+    // clinic assignment changed mid-call) is a recoverable situation, not a
+    // reason to apologise and end the call — send the assistant back to
+    // findDoctors rather than falling through to a generic internal error.
+    return fail(
+      'DOCTOR_UNAVAILABLE',
+      'The selected doctor is no longer available at this clinic. Do not end the call. Apologise briefly to the patient in their current language, call findDoctors again to get current options, and let them choose again.'
+    );
+  }
 
   // Check 7-day limit using clinic's local "today"
   const nowInTz = parseInTimezone(new Date().toISOString(), timezone);

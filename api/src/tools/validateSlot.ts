@@ -19,7 +19,15 @@ export async function validateSlot(
   const { date, time } = parameters;
   const normalized = normalizeTime(time);
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  const doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
+  let doctor;
+  try {
+    doctor = await resolveDoctorForClinic(clinic.organizationId, clinicId, parameters.doctorId);
+  } catch {
+    return fail(
+      'DOCTOR_UNAVAILABLE',
+      'The selected doctor is no longer available at this clinic. Do not end the call. Apologise briefly to the patient in their current language, call findDoctors again to get current options, and let them choose again.'
+    );
+  }
 
   let cachedSlots = null;
   try {

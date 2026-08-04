@@ -10,6 +10,9 @@ interface BookAppointmentParameters {
   doctorId?: string | null;
 }
 
+const BOOKED_SAY =
+  'The appointment is booked. The exact date, time, and reason were already read back and confirmed in the previous turn (via confirmDetails) — do NOT repeat them in full again here. Give a brief, warm confirmation using data.patientFirstName (e.g. "Perfect, Mohan — you\'re all set! We\'ll send a reminder too."). If data.doctorName is present, you may naturally mention which doctor they\'ll see; if it is not present, do not name or promise a specific doctor. Then ask if there is anything else you can help with. If they say no or goodbye, say a warm closing (e.g. "take care, have a great day") and end the call in the same turn.';
+
 export async function bookAppointment(
   clinicId: string,
   callId: string,
@@ -30,15 +33,18 @@ export async function bookAppointment(
   const fullIdempotencyKey = `voice:appointment:create:${clinic.organizationId}:${operationIdempotencyKey}`;
   const previous = await prisma.appointment.findUnique({
     where: { idempotencyKey: fullIdempotencyKey },
-    include: { patient: { select: { name: true } } },
+    include: { patient: { select: { name: true } }, doctor: { select: { name: true } } },
   });
   if (previous) {
     const { date, time } = isoDateAndTime(previous.startAt, clinic.timezone);
     const patientFirstName = firstNameOf(previous.patient.name);
     return ok(
       'ALREADY_BOOKED',
-      'This appointment is already booked. Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that they are all set and will see the doctor on data.date at data.time, and that a reminder will be sent. Then ask if there is anything else you can help with.',
-      { date, time, patientFirstName }
+      // Unlike a fresh BOOKED, this can happen without a confirmDetails just
+      // spoken in this turn (e.g. a retried tool call), so date/time are
+      // safe to state if useful, but keep it to one short warm sentence.
+      'This appointment is already booked. Tell the patient briefly and warmly, using data.patientFirstName, that they\'re all set for data.date at data.time (mention data.doctorName only if present). Then ask if there is anything else you can help with.',
+      { date, time, patientFirstName, doctorName: previous.doctor?.name ?? null }
     );
   }
 
@@ -70,12 +76,19 @@ export async function bookAppointment(
 
     const { date, time } = isoDateAndTime(result.appointment.startAt, clinic.timezone);
     const patientFirstName = firstNameOf(storedName ?? confirmed.patientName);
+    const doctor = result.appointment.doctorId
+      ? await prisma.doctor.findUnique({
+          where: { id: result.appointment.doctorId },
+          select: { name: true },
+        })
+      : null;
 
-    return ok(
-      'BOOKED',
-      'The appointment is booked. Tell the patient warmly, in their current language and using their first name (data.patientFirstName), that they are all set and will see the doctor on data.date at data.time, and that a reminder will be sent. Then ask if there is anything else you can help with. If they say no or goodbye, say a warm closing (e.g. "take care, have a great day") and end the call in the same turn.',
-      { date, time, patientFirstName }
-    );
+    return ok('BOOKED', BOOKED_SAY, {
+      date,
+      time,
+      patientFirstName,
+      doctorName: doctor?.name ?? null,
+    });
   } catch (error) {
     if (error instanceof AppointmentCommandError) {
       if (error.code === 'slot_unavailable') {
@@ -96,6 +109,15 @@ export async function bookAppointment(
           'The confirmed appointment date or time is invalid. Ask the patient, in their current language, to choose an available future slot.'
         );
       }
+    }
+    // A stale/invalid doctorId throws a plain Error from resolveDoctorForClinic
+    // (not an AppointmentCommandError) — treat it as recoverable rather than
+    // falling through to the generic internal-error path that ends the call.
+    if (error instanceof Error && /doctor/i.test(error.message)) {
+      return fail(
+        'DOCTOR_UNAVAILABLE',
+        'The selected doctor is no longer available at this clinic. Do not end the call. Apologise briefly to the patient in their current language, call findDoctors again to get current options, and continue booking with their new choice.'
+      );
     }
     throw error;
   }

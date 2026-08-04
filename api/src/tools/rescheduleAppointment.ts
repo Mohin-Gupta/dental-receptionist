@@ -115,6 +115,15 @@ export async function rescheduleAppointment(
         );
       }
     }
+    // A stale/invalid doctorId throws a plain Error from resolveDoctorForClinic
+    // (not an AppointmentCommandError) — treat it as recoverable rather than
+    // falling through to the generic internal-error path that ends the call.
+    if (error instanceof Error && /doctor/i.test(error.message)) {
+      return fail(
+        'DOCTOR_UNAVAILABLE',
+        'The selected doctor is no longer available at this clinic. Do not end the call. Apologise briefly to the patient in their current language and offer to keep the appointment with the original doctor, or a clinic staff callback if that is not possible.'
+      );
+    }
     throw error;
   }
 }

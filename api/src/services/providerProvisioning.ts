@@ -568,6 +568,7 @@ export interface VerifiedVapiResource {
 
 export const REQUIRED_RECEPTIONIST_VAPI_TOOLS = [
   'checkAvailability',
+  'findDoctors',
   'validateSlot',
   'storeName',
   'confirmDetails',
