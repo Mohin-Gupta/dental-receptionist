@@ -59,22 +59,22 @@ export default function CancelModal({ appointment, timezone, onClose, onSuccess 
         tabIndex={-1}
       >
         <header className="modal-header">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#efd0cc] bg-danger-soft text-danger">
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </span>
-            <div>
+            <div className="min-w-0">
               <p className="section-kicker mb-1">Schedule change</p>
               <h2 id="cancel-appointment-title" className="section-title">Cancel appointment</h2>
-              <p className="section-description mt-0.5">{appointment.patient.name}</p>
+              <p className="section-description mt-0.5 break-words">{appointment.patient.name}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="icon-button" aria-label="Close cancel appointment dialog">
+          <button type="button" onClick={onClose} className="icon-button shrink-0" aria-label="Close cancel appointment dialog">
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
 
-        <div className="space-y-4 p-5">
+        <div className="modal-body space-y-4 p-5">
           <div className="surface-card-soft p-4">
             <p className="section-kicker">Appointment to cancel</p>
             <p className="mt-2 text-sm font-bold text-ink">{appointment.reason}</p>
@@ -104,7 +104,7 @@ export default function CancelModal({ appointment, timezone, onClose, onSuccess 
             ref={keepAppointmentRef}
             type="button"
             onClick={onClose}
-            className="btn-secondary flex-1"
+            className="btn-secondary w-full sm:flex-1"
           >
             Keep appointment
           </button>
@@ -112,7 +112,7 @@ export default function CancelModal({ appointment, timezone, onClose, onSuccess 
             type="button"
             onClick={handleConfirm}
             disabled={loading}
-            className="btn-danger flex-1"
+            className="btn-danger w-full sm:flex-1"
           >
             {loading
               ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Cancelling...</>

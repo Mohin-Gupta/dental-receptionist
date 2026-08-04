@@ -12,7 +12,7 @@ import {
 const router = createRouter();
 
 // Used by the admin "New Appointment" modal to show bookable times for a given
-// date. Reuses the exact same getAvailableSlots logic Maya uses on calls —
+// date. Reuses the exact same getAvailableSlots logic Comeigo uses on calls —
 // same business hours, same Google Calendar freebusy check, same 30-min slot grid.
 router.get('/dashboard/available-slots', requirePermission('appointments:write'), async (req: Request, res: Response) => {
   const organizationId = req.auth!.organizationId;

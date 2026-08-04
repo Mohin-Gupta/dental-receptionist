@@ -615,9 +615,11 @@ input[type="time"] {
 }
 
 .modal-panel {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   max-height: min(90dvh, 760px);
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 1.25rem;
   background: var(--surface);
@@ -626,10 +628,10 @@ input[type="time"] {
 }
 
 .modal-header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 2;
   display: flex;
+  flex: none;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
@@ -640,15 +642,23 @@ input[type="time"] {
 }
 
 .modal-footer {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 2;
   display: flex;
+  flex: none;
   gap: 0.7rem;
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.95);
   padding: 1rem 1.25rem;
   backdrop-filter: blur(12px);
+}
+
+.modal-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .skeleton {
@@ -681,6 +691,14 @@ input[type="time"] {
 }
 }
 
+.ui-input:focus-visible,
+.ui-select:focus-visible,
+.ui-textarea:focus-visible {
+  outline: none;
+  border-color: var(--brand-dark);
+  box-shadow: 0 0 0 2px var(--brand-dark);
+}
+
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -698,6 +716,29 @@ input[type="time"] {
 
 @keyframes shimmer {
   100% { transform: translateX(100%); }
+}
+
+@media (max-width: 639px) {
+  @layer components {
+    .modal-backdrop {
+      padding: 0.5rem;
+    }
+
+    .modal-panel {
+      max-height: calc(100dvh - 1rem);
+      border-radius: 1rem;
+    }
+
+    .modal-footer {
+      flex-direction: column;
+      padding: 0.75rem;
+    }
+
+    .modal-footer > * {
+      width: 100%;
+      flex: none;
+    }
+  }
 }
 
 @media (min-width: 640px) {

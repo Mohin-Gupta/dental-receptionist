@@ -68,7 +68,7 @@ async function sendWithResendApi(
 }
 
 async function sendMail(to: string, subject: string, text: string): Promise<void> {
-  const from = process.env.SMTP_FROM ?? 'Dental Receptionist <no-reply@example.com>';
+  const from = process.env.SMTP_FROM ?? 'Comeigo <no-reply@example.com>';
   const resendApiKey = getResendApiKey();
 
   if (resendApiKey) {
@@ -95,8 +95,8 @@ export async function sendInviteEmail(email: string, token: string): Promise<voi
   const url = `${primaryWebOrigin()}/accept-invite?token=${encodeURIComponent(token)}`;
   await sendMail(
     email,
-    'You have been invited to Dental Receptionist',
-    `You have been invited to Dental Receptionist.\n\nAccept your invite here:\n${url}\n\nThis link expires soon.`
+    'You have been invited to Comeigo',
+    `You have been invited to Comeigo.\n\nAccept your invite here:\n${url}\n\nThis link expires soon.`
   );
 }
 
@@ -104,7 +104,7 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
   const url = `${primaryWebOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
   await sendMail(
     email,
-    'Reset your Dental Receptionist password',
+    'Reset your Comeigo password',
     `Reset your password here:\n${url}\n\nIf you did not request this, you can ignore this email.`
   );
 }
@@ -113,7 +113,7 @@ export async function sendVerifyEmail(email: string, token: string): Promise<voi
   const url = `${primaryWebOrigin()}/verify-email?token=${encodeURIComponent(token)}`;
   await sendMail(
     email,
-    'Verify your Dental Receptionist email',
+    'Verify your Comeigo email',
     `Verify your email here:\n${url}\n\nIf you did not create this account, you can ignore this email.`
   );
 }

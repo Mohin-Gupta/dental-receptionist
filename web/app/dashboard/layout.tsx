@@ -118,7 +118,7 @@ function SidebarContent({
             </label>
           ) : (
             <p className="mb-1 truncate text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[#89aa9e]">
-              {activeOrganizationName ?? 'Maya'}
+              {activeOrganizationName ?? 'Comeigo'}
             </p>
           )}
 
@@ -382,7 +382,7 @@ export default function DashboardLayout({
           <BrandMark compact inverted />
           <div className="min-w-0">
             <p className="truncate text-xs font-semibold text-white">
-              {activeOrganizationName ?? 'Maya'}
+              {activeOrganizationName ?? 'Comeigo'}
             </p>
             <p className="truncate text-[0.62rem] text-[#89aa9e]">Clinic intelligence</p>
           </div>

@@ -298,7 +298,7 @@ export default function RegisterOrganizationPage() {
               <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-brand text-xs font-bold text-white">02</span>
               <div>
                 <h2 id="clinic-details-title" className="text-sm font-bold text-ink">Clinic profile</h2>
-                <p className="mt-0.5 text-xs text-muted">The home base Maya will use for patient conversations.</p>
+                <p className="mt-0.5 text-xs text-muted">The home base Comeigo will use for patient conversations.</p>
               </div>
             </div>
 

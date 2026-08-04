@@ -1,4 +1,4 @@
-# Dental Receptionist web
+# Comeigo web
 
 Next.js 16 dashboard for clinic administration, billing, usage, and provider
 integrations.

@@ -35,6 +35,7 @@ import PageHeader from '@/components/ui/PageHeader';
 const inputClass =
   'ui-input';
 const selectClass = 'ui-select';
+const TENANT_VAPI_CONFIGURATION_ENABLED = process.env.NODE_ENV !== 'production';
 
 type CalendarStatus = {
   clinicId: string;
@@ -75,6 +76,11 @@ function resourceLabel(resourceType: string): string {
   return 'Assistant';
 }
 
+function isTenantConfigurableAccount(account: ProviderAccountView): boolean {
+  return account.credentialSource !== 'platform' &&
+    (TENANT_VAPI_CONFIGURATION_ENABLED || account.provider !== 'vapi');
+}
+
 export default function IntegrationsPage() {
   const {
     activeOrganizationId,
@@ -91,7 +97,7 @@ export default function IntegrationsPage() {
   const [notice, setNotice] = useState('');
   const [needsMfa, setNeedsMfa] = useState(false);
   const [accountForm, setAccountForm] = useState({
-    provider: 'vapi' as IntegrationProvider,
+    provider: (TENANT_VAPI_CONFIGURATION_ENABLED ? 'vapi' : 'twilio') as IntegrationProvider,
     externalAccountId: '',
     secret: '',
   });
@@ -110,11 +116,11 @@ export default function IntegrationsPage() {
     () => clinics.filter(clinic => clinic.organizationId === activeOrganizationId),
     [activeOrganizationId, clinics]
   );
-  const tenantManagedAccounts = useMemo(
-    () => accounts.filter(account => account.credentialSource !== 'platform'),
+  const configurableTenantAccounts = useMemo(
+    () => accounts.filter(isTenantConfigurableAccount),
     [accounts]
   );
-  const selectedResourceAccount = tenantManagedAccounts.find(
+  const selectedResourceAccount = configurableTenantAccounts.find(
     account => account.id === resourceForm.providerAccountId
   );
   const availableInboundAssistants = selectedResourceAccount?.resources.filter(resource =>
@@ -144,12 +150,10 @@ export default function IntegrationsPage() {
         ...current,
         providerAccountId:
           accountsResponse.data.accounts.some(
-            account => account.id === current.providerAccountId && account.credentialSource !== 'platform'
+            account => account.id === current.providerAccountId && isTenantConfigurableAccount(account)
           )
             ? current.providerAccountId
-            : accountsResponse.data.accounts.find(
-                account => account.credentialSource !== 'platform'
-              )?.id ?? '',
+            : accountsResponse.data.accounts.find(isTenantConfigurableAccount)?.id ?? '',
         clinicId: current.clinicId || activeClinicId || '',
       }));
     } catch (loadError) {
@@ -497,8 +501,8 @@ export default function IntegrationsPage() {
             </div>
           ) : accounts.map(account => {
             const platformManaged = account.credentialSource === 'platform';
-            const productionVapiStagingOnly =
-              process.env.NODE_ENV === 'production' && account.provider === 'vapi' && !platformManaged;
+            const tenantVapiReadOnly =
+              !TENANT_VAPI_CONFIGURATION_ENABLED && account.provider === 'vapi' && !platformManaged;
             return (
             <section key={account.id} className="surface-card overflow-hidden">
               <div className="flex flex-col gap-4 border-b border-line p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
@@ -511,12 +515,13 @@ export default function IntegrationsPage() {
                     <h2 className="text-sm font-bold text-ink">{providerTitle(account.provider)}</h2>
                     <span className={statusClass(account.status)}>{account.status}</span>
                     {platformManaged && <span className="status-pill status-info">Platform funded</span>}
+                    {tenantVapiReadOnly && <span className="status-pill status-info">Comeigo managed</span>}
                   </div>
                   {!platformManaged && <p className="mt-2 max-w-[18rem] truncate font-mono text-[0.7rem] text-muted" title={account.externalAccountId}>{account.externalAccountId}</p>}
-                  <p className="mt-1 text-xs leading-5 text-muted">{platformManaged ? 'Credentials and resource assignments are controlled by the service operator.' : `Credentials: ${account.hasCredentials ? 'configured' : 'missing'}`}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">{platformManaged || tenantVapiReadOnly ? 'Credentials and resource assignments are controlled by Comeigo.' : `Credentials: ${account.hasCredentials ? 'configured' : 'missing'}`}</p>
                   </div>
                 </div>
-                {!platformManaged && <div className="flex flex-wrap gap-2">
+                {!platformManaged && !tenantVapiReadOnly && <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => setRotatingAccountId(account.id)} className="btn-secondary"><KeyRound className="h-3.5 w-3.5" /> Rotate secret</button>
                   <button
                     type="button"
@@ -529,7 +534,7 @@ export default function IntegrationsPage() {
                 </div>}
               </div>
 
-              {!platformManaged && rotatingAccountId === account.id && (
+              {!platformManaged && !tenantVapiReadOnly && rotatingAccountId === account.id && (
                 <form onSubmit={event => rotateCredentials(event, account)} className="border-b border-[#ead9b6] bg-warning-soft p-4 sm:p-5">
                   <label className="ui-label">New {account.provider === 'vapi' ? 'API key' : 'Auth Token'}
                     <input type="password" value={rotationSecret} onChange={event => setRotationSecret(event.target.value)} autoComplete="new-password" minLength={16} maxLength={512} className={`${inputClass} mt-1.5`} required />
@@ -558,9 +563,9 @@ export default function IntegrationsPage() {
                           <p className="mt-1 text-[0.7rem] text-muted">{resourceLabel(resource.resourceType)} · {clinicName}</p>
                         </div>
                       </div>
-                      {platformManaged || productionVapiStagingOnly ? (
+                      {platformManaged || tenantVapiReadOnly ? (
                         <span className="status-pill status-neutral">
-                          {platformManaged ? 'Operator managed' : 'Production staging only'}
+                          Comeigo managed
                         </span>
                       ) : (
                         <button
@@ -584,15 +589,17 @@ export default function IntegrationsPage() {
         <div className="space-y-5">
           <form onSubmit={createAccount} className="surface-card overflow-hidden">
             <div className="surface-header">
-              <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand"><ServerCog className="h-4 w-4" /></span><div><p className="section-kicker mb-1">Credentials</p><h2 className="section-title">Add provider account</h2><p className="section-description">For credentials owned by your organization.</p></div></div>
+              <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand"><ServerCog className="h-4 w-4" /></span><div><p className="section-kicker mb-1">Credentials</p><h2 className="section-title">{TENANT_VAPI_CONFIGURATION_ENABLED ? 'Add provider account' : 'Add Twilio account'}</h2><p className="section-description">{TENANT_VAPI_CONFIGURATION_ENABLED ? 'For credentials owned by your organization.' : 'Connect your organization-owned messaging credentials.'}</p></div></div>
             </div>
             <div className="space-y-4 p-4 sm:p-5">
-              <div className="alert-info"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>Tenant-owned Vapi mappings are staging-only in production; live Vapi voice is provisioned by the service operator.</span></div>
-              <label className="ui-label">Provider
-                <select value={accountForm.provider} onChange={event => setAccountForm({ provider: event.target.value as IntegrationProvider, externalAccountId: '', secret: '' })} className={`${selectClass} mt-1.5`}>
-                  <option value="vapi">Vapi</option><option value="twilio">Twilio</option>
-                </select>
-              </label>
+              <div className="alert-info"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>{TENANT_VAPI_CONFIGURATION_ENABLED ? 'Tenant-owned Vapi mappings are available in this non-production environment.' : 'Vapi voice is provisioned and managed by Comeigo. Add Twilio credentials here for organization-owned messaging.'}</span></div>
+              {TENANT_VAPI_CONFIGURATION_ENABLED && (
+                <label className="ui-label">Provider
+                  <select value={accountForm.provider} onChange={event => setAccountForm({ provider: event.target.value as IntegrationProvider, externalAccountId: '', secret: '' })} className={`${selectClass} mt-1.5`}>
+                    <option value="vapi">Vapi</option><option value="twilio">Twilio</option>
+                  </select>
+                </label>
+              )}
               {accountForm.provider === 'twilio' && (
                 <label className="ui-label">Twilio Account SID
                   <input value={accountForm.externalAccountId} onChange={event => setAccountForm(current => ({ ...current, externalAccountId: event.target.value }))} placeholder="AC…" className={`${inputClass} mt-1.5 font-mono`} required />
@@ -609,13 +616,13 @@ export default function IntegrationsPage() {
             <div className="surface-header">
               <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand"><Plus className="h-4 w-4" /></span><div><p className="section-kicker mb-1">Resource mapping</p><h2 className="section-title">Map external resource</h2><p className="section-description">Ownership is verified before the resource is reserved.</p></div></div>
             </div>
-            {tenantManagedAccounts.length === 0 ? (
-              <div className="p-4 sm:p-5"><div className="alert-info"><PlugZap className="mt-0.5 h-4 w-4 shrink-0" />No tenant-managed provider account is available. Platform-funded Vapi resources are assigned by the service operator.</div></div>
+            {configurableTenantAccounts.length === 0 ? (
+              <div className="p-4 sm:p-5"><div className="alert-info"><PlugZap className="mt-0.5 h-4 w-4 shrink-0" />{TENANT_VAPI_CONFIGURATION_ENABLED ? 'No tenant-managed provider account is available.' : 'No organization-owned Twilio account is available. Vapi voice resources are managed by Comeigo.'}</div></div>
             ) : (
               <div className="space-y-4 p-4 sm:p-5">
                 <label className="ui-label">Provider account
                   <select value={resourceForm.providerAccountId} onChange={event => selectResourceAccount(event.target.value)} className={`${selectClass} mt-1.5`} required>
-                    {tenantManagedAccounts.map(account => <option key={account.id} value={account.id}>{providerTitle(account.provider)} · {account.externalAccountId}</option>)}
+                    {configurableTenantAccounts.map(account => <option key={account.id} value={account.id}>{providerTitle(account.provider)} · {account.externalAccountId}</option>)}
                   </select>
                 </label>
                 <label className="ui-label">Resource type

@@ -335,7 +335,7 @@ export default function MfaPage() {
 
   const downloadRecoveryCodes = () => {
     const contents = [
-      'Maya MFA recovery codes',
+      'Comeigo MFA recovery codes',
       `Generated: ${new Date().toISOString()}`,
       '',
       ...recoveryCodes,
@@ -345,7 +345,7 @@ export default function MfaPage() {
     const objectUrl = URL.createObjectURL(new Blob([contents], { type: 'text/plain;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = 'maya-recovery-codes.txt';
+    anchor.download = 'comeigo-recovery-codes.txt';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();

@@ -202,7 +202,7 @@ subscription `start_at`; the customer must still authorize the subscription
 before trial access can be granted. For example:
 
 ```json
-{"starter":{"currency":"INR","planId":"plan_00000000000001","amountMinor":499900,"period":"monthly","interval":1,"quantity":1,"totalCount":120,"customerNotify":true,"name":"Starter","description":"Dental Receptionist Starter subscription","entitlements":{"appointments.write":true,"communications.sms":true,"communications.voice":true,"clinics.max":1},"trialDays":0}}
+{"starter":{"currency":"INR","planId":"plan_00000000000001","amountMinor":499900,"period":"monthly","interval":1,"quantity":1,"totalCount":120,"customerNotify":true,"name":"Starter","description":"Comeigo Starter subscription","entitlements":{"appointments.write":true,"communications.sms":true,"communications.voice":true,"clinics.max":1},"trialDays":0}}
 ```
 
 Every sellable plan must explicitly grant the runtime feature keys it includes:

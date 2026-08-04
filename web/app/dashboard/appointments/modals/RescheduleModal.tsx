@@ -83,22 +83,22 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
         tabIndex={-1}
       >
         <header className="modal-header">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand">
               <CalendarClock className="h-4 w-4" aria-hidden="true" />
             </span>
-            <div>
+            <div className="min-w-0">
               <p className="section-kicker mb-1">Update schedule</p>
               <h2 id="reschedule-appointment-title" className="section-title">Reschedule appointment</h2>
-              <p id="reschedule-appointment-description" className="section-description mt-0.5">{appointment.patient.name}</p>
+              <p id="reschedule-appointment-description" className="section-description mt-0.5 break-words">{appointment.patient.name}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="icon-button" aria-label="Close reschedule appointment dialog">
+          <button type="button" onClick={onClose} className="icon-button shrink-0" aria-label="Close reschedule appointment dialog">
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
 
-        <div className="space-y-5 p-5">
+        <div className="modal-body space-y-5 p-5">
           <div className="surface-card-soft p-4">
             <p className="section-kicker">Current appointment</p>
             <p className="mt-2 text-sm font-bold text-ink">{appointment.reason}</p>
@@ -153,7 +153,7 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
           <button
             type="button"
             onClick={onClose}
-            className="btn-secondary flex-1"
+            className="btn-secondary w-full sm:flex-1"
           >
             Cancel
           </button>
@@ -161,7 +161,7 @@ export default function RescheduleModal({ appointment, timezone, onClose, onSucc
             type="button"
             onClick={handleSubmit}
             disabled={loading || !newDate || !newTime}
-            className="btn-primary flex-1"
+            className="btn-primary w-full sm:flex-1"
           >
             {loading
               ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Rescheduling...</>

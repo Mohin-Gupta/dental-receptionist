@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { Appointment } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -62,6 +63,7 @@ export default function AppointmentsPage() {
 
   const showActions =
     activeTab === 'upcoming' && canWriteAppointments;
+  const portalTarget = typeof document === 'undefined' ? null : document.body;
 
   return (
     <div className="page-shell">
@@ -185,16 +187,17 @@ export default function AppointmentsPage() {
         )}
       </section>
 
-      {showNewModal && (
+      {showNewModal && portalTarget && createPortal(
         <NewAppointmentModal
           onClose={() =>
             setShowNewModal(false)
           }
           onSuccess={handleSuccess}
-        />
+        />,
+        portalTarget
       )}
 
-      {rescheduleTarget && (
+      {rescheduleTarget && portalTarget && createPortal(
         <RescheduleModal
           appointment={
             rescheduleTarget
@@ -206,10 +209,11 @@ export default function AppointmentsPage() {
             )
           }
           onSuccess={handleSuccess}
-        />
+        />,
+        portalTarget
       )}
 
-      {cancelTarget && (
+      {cancelTarget && portalTarget && createPortal(
         <CancelModal
           appointment={cancelTarget}
           timezone={timezone}
@@ -217,7 +221,8 @@ export default function AppointmentsPage() {
             setCancelTarget(null)
           }
           onSuccess={handleSuccess}
-        />
+        />,
+        portalTarget
       )}
     </div>
   );

@@ -221,7 +221,7 @@ export function getRazorpayRuntimeConfig(): RazorpayRuntimeConfig {
 
   const checkoutName = (process.env.RAZORPAY_CHECKOUT_NAME ||
     process.env.APP_NAME ||
-    'Dental Receptionist').trim();
+    'Comeigo').trim();
   if (!checkoutName || checkoutName.length > 100) {
     throw new BillingConfigurationError(
       'RAZORPAY_CHECKOUT_NAME must contain between 1 and 100 characters'

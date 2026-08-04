@@ -1078,7 +1078,7 @@ router.post('/auth/mfa/setup',
         password: parsed.data.password,
         purpose: parsed.data.intent,
       });
-      const serviceName = process.env.APP_NAME ?? 'Dental Receptionist';
+      const serviceName = process.env.APP_NAME ?? 'Comeigo';
       const otpauth = authenticator.keyuri(req.auth!.email, serviceName, enrollment.secret);
       const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
       return res.json({

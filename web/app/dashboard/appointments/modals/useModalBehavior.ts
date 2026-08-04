@@ -47,7 +47,7 @@ export default function useModalBehavior(
 
     const focusFrame = window.requestAnimationFrame(() => {
       const initialTarget = initialFocusRef?.current ?? dialog;
-      initialTarget?.focus();
+      initialTarget?.focus({ preventScroll: true });
     });
 
     const handleKeyDown = (event: KeyboardEvent) => {

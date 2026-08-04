@@ -15,7 +15,7 @@ export default function BrandMark({
     <div
       className={cn('inline-flex items-center gap-3', className)}
       role="img"
-      aria-label="Maya clinic intelligence"
+      aria-label="Comeigo clinic intelligence"
     >
       <span
         className={cn(
@@ -47,7 +47,7 @@ export default function BrandMark({
               inverted ? 'text-white' : 'text-[#17231f]'
             )}
           >
-            Maya
+            Comeigo
           </span>
           <span
             className={cn(

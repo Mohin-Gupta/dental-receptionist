@@ -93,7 +93,7 @@ const { minDate, maxDate } = dateLimits;
       );
   }, []);
 
-  // Fetch available slots whenever the date changes — same logic Maya uses on calls
+  // Fetch available slots whenever the date changes — same logic Comeigo uses on calls
   useEffect(() => {
     if (!date || !selectedDoctorId) {
       setSlots([]);
@@ -162,22 +162,22 @@ const { minDate, maxDate } = dateLimits;
         tabIndex={-1}
       >
         <header className="modal-header">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d3e6df] bg-brand-softer text-brand">
               <Plus className="h-4 w-4" aria-hidden="true" />
             </span>
-            <div>
+            <div className="min-w-0">
               <p className="section-kicker mb-1">Manual booking</p>
               <h2 id="new-appointment-title" className="section-title">New appointment</h2>
               <p id="new-appointment-description" className="section-description mt-0.5">Book manually — same flow as a phone booking</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="icon-button" aria-label="Close new appointment dialog">
+          <button type="button" onClick={onClose} className="icon-button shrink-0" aria-label="Close new appointment dialog">
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
 
-        <div className="space-y-4 p-4 sm:p-5">
+        <div className="modal-body space-y-4 p-4 sm:p-5">
           <section className="surface-card-soft p-4">
             <div className="mb-4 flex items-center gap-2.5">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand-dark">
@@ -341,7 +341,7 @@ const { minDate, maxDate } = dateLimits;
             <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               The patient will receive a booking confirmation SMS, a reminder call 1 hour before the
-              appointment, and a feedback SMS 1 hour after — same as a phone booking with Maya.
+              appointment, and a feedback SMS 1 hour after — same as a phone booking with Comeigo.
             </p>
           </div>
         </div>
@@ -350,7 +350,7 @@ const { minDate, maxDate } = dateLimits;
           <button
             type="button"
             onClick={onClose}
-            className="btn-secondary flex-1"
+            className="btn-secondary w-full sm:flex-1"
           >
             Cancel
           </button>
@@ -362,7 +362,7 @@ const { minDate, maxDate } = dateLimits;
               !selectedDoctorId ||
               !selectedSlot
             }
-            className="btn-primary flex-1"
+            className="btn-primary w-full sm:flex-1"
           >
             {submitting
               ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Booking...</>

@@ -5,7 +5,7 @@ import '@fontsource-variable/newsreader';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Maya — Clinic intelligence',
+  title: 'Comeigo — Clinic intelligence',
   description: 'AI-powered patient communication and clinic operations, beautifully coordinated.',
 };
 

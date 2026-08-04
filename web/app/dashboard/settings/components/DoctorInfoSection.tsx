@@ -108,7 +108,7 @@ export default function DoctorInfoSection({
     <Section
       id="doctor-settings"
       title="Doctors"
-      description="Manage the clinicians Maya can book and their location-specific availability."
+      description="Manage the clinicians Comeigo can book and their location-specific availability."
       eyebrow="Care team"
       icon={Stethoscope}
     >

@@ -33,7 +33,7 @@ export default function BusinessHoursSection({
     <Section
       id="hours-settings"
       title="Business hours"
-      description="Set the weekly schedule Maya uses when offering appointment times."
+      description="Set the weekly schedule Comeigo uses when offering appointment times."
       eyebrow="Availability"
       icon={Clock3}
     >

@@ -39,7 +39,7 @@ export default function AuthShell({ children, wide = false, className }: AuthShe
             Every patient call, thoughtfully handled.
           </p>
           <p className="mt-6 max-w-lg text-sm leading-7 text-[#afc5bd]">
-            Maya keeps the front desk composed—from first hello to confirmed appointment—while your team stays focused on care.
+            Comeigo keeps the front desk composed—from first hello to confirmed appointment—while your team stays focused on care.
           </p>
 
           <motion.div
@@ -54,7 +54,7 @@ export default function AuthShell({ children, wide = false, className }: AuthShe
                   <Headphones className="h-4 w-4" />
                 </span>
                 <div>
-                  <p className="text-xs font-semibold text-white">Maya is answering</p>
+                  <p className="text-xs font-semibold text-white">Comeigo is answering</p>
                   <p className="mt-0.5 text-[0.62rem] text-[#9eb8af]">New patient inquiry · 02:14</p>
                 </div>
               </div>

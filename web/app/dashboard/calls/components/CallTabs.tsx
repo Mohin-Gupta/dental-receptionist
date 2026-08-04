@@ -18,7 +18,7 @@ const tabs = [
     label: 'Inbound',
     icon: PhoneIncoming,
     description:
-      'Calls Maya answered from patients',
+      'Calls Comeigo answered from patients',
   },
 
   {
@@ -26,7 +26,7 @@ const tabs = [
     label: 'Outbound',
     icon: PhoneOutgoing,
     description:
-      'Reminder calls Maya made',
+      'Reminder calls Comeigo made',
   },
 ] as const;
 
