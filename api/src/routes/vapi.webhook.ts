@@ -517,7 +517,8 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   }
 
   const message = parsed.data.message;
-  console.log(`The message is ${message}`)
+  console.log(`The type is ${message.type}`)
+  console.log(`tool call list : ${message.toolCallList}`)
   if (message.type === 'tool-calls' && !message.toolCallList) {
     return res.status(400).json({ error: 'Tool calls are missing' });
   }
@@ -602,7 +603,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     }
 
     await markWebhookProcessed(received.event, response);
-    console.log(`The response is ${response}`)
+    console.log(`The response is ${res.json(response)}`)
     return res.json(response);
   } catch (error) {
     await markWebhookFailed(received.event.id, error);
