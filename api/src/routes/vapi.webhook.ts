@@ -487,11 +487,12 @@ async function processEndOfCall(message: any, tenant: Awaited<ReturnType<typeof 
 async function processTransferDestinationRequest(
   tenant: Awaited<ReturnType<typeof resolveVapiTenant>>
 ) {
+  console.log("Transfer call function")
   const clinic = await prisma.clinic.findUnique({
     where: { id: tenant.clinicId },
     select: { handoffPhoneNumber: true },
   });
-
+  console.log("We passed the typescript error")
   if (!clinic?.handoffPhoneNumber) {
     // No destination is configured for this clinic. Vapi will surface this
     // error to the assistant instead of transferring, so the assistant's
@@ -516,6 +517,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   }
 
   const message = parsed.data.message;
+  console.log(`The message is ${message}`)
   if (message.type === 'tool-calls' && !message.toolCallList) {
     return res.status(400).json({ error: 'Tool calls are missing' });
   }
