@@ -507,7 +507,7 @@ async function processTransferDestinationRequest(
       number: clinic.handoffPhoneNumber,
       message: {
         type: 'request-start' as const,
-        message: 'Sure, connecting you to our clinic team now. Please hold.',
+        message: 'Sure, connecting you to our clinic team now',
       },
     },
   };
@@ -606,6 +606,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     }
 
     await markWebhookProcessed(received.event, response);
+    console.log("Mark processed done")
     return res.json(response);
   } catch (error) {
     await markWebhookFailed(received.event.id, error);
