@@ -262,6 +262,8 @@ export interface BranchSettings {
   clinicWebsite: string | null;
   clinicAbout: string | null;
   clinicServices: string[] | null;
+  /** Number the AI receptionist transfers a call to when the caller asks for a human. */
+  handoffPhoneNumber: string | null;
   createdAt: string;
 }
 

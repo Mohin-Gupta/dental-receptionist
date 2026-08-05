@@ -469,6 +469,46 @@ async function processEndOfCall(message: any, tenant: Awaited<ReturnType<typeof 
   return { received: true };
 }
 
+/**
+ * user-handoff: the caller asked to speak to an actual person. Vapi's
+ * `transferCall` tool is configured with an empty `destinations` array in
+ * the Vapi dashboard, so instead of a fixed number baked into the assistant,
+ * Vapi asks this webhook where to send the call on every transfer attempt
+ * (the `transfer-destination-request` server message). That fits this
+ * app's shared-assistant-per-organization model: the same Vapi assistant is
+ * reused across many clinics (see buildClinicVariables), so the destination
+ * has to be resolved per-call from the clinic the tenant resolver already
+ * mapped this call to, never from anything the caller or model supplies.
+ *
+ * Response shape is dictated by Vapi, not this app's ToolResponse contract:
+ * it must be `{ destination: {...} }` or `{ error: string }` at the top
+ * level (see https://docs.vapi.ai/phone-calling/dynamic-call-transfers).
+ */
+async function processTransferDestinationRequest(
+  tenant: Awaited<ReturnType<typeof resolveVapiTenant>>
+) {
+  const clinic = await prisma.clinic.findUnique({
+    where: { id: tenant.clinicId },
+    select: { handoffPhoneNumber: true },
+  });
+
+  if (!clinic?.handoffPhoneNumber) {
+    // No destination is configured for this clinic. Vapi will surface this
+    // error to the assistant instead of transferring, so the assistant's
+    // system prompt should tell it to apologise and offer a callback when a
+    // transfer attempt fails, rather than silently going quiet.
+    return { error: 'No human handoff number is configured for this clinic.' };
+  }
+
+  return {
+    destination: {
+      type: 'number',
+      number: clinic.handoffPhoneNumber,
+      message: 'Sure, connecting you to our clinic team now. Please hold.',
+    },
+  };
+}
+
 router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
   const parsed = webhookSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -514,7 +554,11 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     communicationAttemptId: tenant.attempt.id,
   });
   if (!claimed) {
-    return ['assistant-request', 'tool-calls'].includes(message.type)
+    // These message types require a synchronous destination/result in the
+    // response body itself (Vapi blocks the live call on it) — a bare 202
+    // would be read as a failed/empty transfer or tool result, not a retry
+    // signal, so fail closed with 503 instead.
+    return ['assistant-request', 'tool-calls', 'transfer-destination-request'].includes(message.type)
       ? res.status(503).json({ error: 'Webhook is already processing' })
       : res.status(202).json({ received: true, processing: true });
   }
@@ -549,6 +593,8 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
         : await processToolCalls(message, tenant);
     } else if (message.type === 'end-of-call-report') {
       response = await processEndOfCall(message, tenant);
+    } else if (message.type === 'transfer-destination-request') {
+      response = await processTransferDestinationRequest(tenant);
     } else {
       response = { received: true };
     }

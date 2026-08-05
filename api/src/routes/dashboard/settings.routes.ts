@@ -48,6 +48,9 @@ const clinicSettingsSchema = z.object({
   clinicAbout: nullableText(5000).optional(),
   clinicServices: serviceList.optional(),
   businessHours: businessHours.optional(),
+  // The number the AI receptionist transfers a call to when the caller asks
+  // for a human. Null/'' clears it (feature falls back to an apology).
+  handoffPhoneNumber: nullableText(40).optional(),
 });
 
 const settingsUpdateSchema = clinicSettingsSchema.extend({
@@ -98,18 +101,30 @@ router.patch('/dashboard/settings', requirePermission('settings:write'), async (
   }
 
   let normalizedClinicPhone = clinicBody.phone;
-  if (clinicBody.phone) {
+  let normalizedHandoffPhoneNumber = clinicBody.handoffPhoneNumber;
+  if (clinicBody.phone || clinicBody.handoffPhoneNumber) {
     const clinicCallingCode = await prisma.clinic.findFirst({
       where: { id: clinicId, organizationId },
       select: { defaultCallingCode: true },
     });
     if (!clinicCallingCode) return res.status(404).json({ error: 'Clinic not found' });
-    try {
-      normalizedClinicPhone = toE164(clinicBody.phone, clinicCallingCode.defaultCallingCode);
-    } catch {
-      return res.status(400).json({ error: 'Invalid clinic phone number' });
+    if (clinicBody.phone) {
+      try {
+        normalizedClinicPhone = toE164(clinicBody.phone, clinicCallingCode.defaultCallingCode);
+      } catch {
+        return res.status(400).json({ error: 'Invalid clinic phone number' });
+      }
+    }
+    if (clinicBody.handoffPhoneNumber) {
+      try {
+        normalizedHandoffPhoneNumber = toE164(clinicBody.handoffPhoneNumber, clinicCallingCode.defaultCallingCode);
+      } catch {
+        return res.status(400).json({ error: 'Invalid human handoff phone number' });
+      }
     }
   }
+  // An empty string is how the dashboard clears the field.
+  if (normalizedHandoffPhoneNumber === '') normalizedHandoffPhoneNumber = null;
 
   const [updatedOrganization, updated] = await prisma.$transaction([
     organizationBody
@@ -144,6 +159,7 @@ router.patch('/dashboard/settings', requirePermission('settings:write'), async (
             ? Prisma.JsonNull
             : clinicBody.clinicServices,
         businessHours: clinicBody.businessHours,
+        handoffPhoneNumber: normalizedHandoffPhoneNumber,
       },
       select: publicClinicSelect,
     }),

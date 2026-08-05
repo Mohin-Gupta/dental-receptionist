@@ -155,6 +155,24 @@ export default function ClinicInfoSection({
         </div>
 
         <div className="md:col-span-2">
+          <Field
+            label="Human handoff number"
+            value={
+              form.handoffPhoneNumber ??
+              ''
+            }
+            onChange={(v) =>
+              update(
+                'handoffPhoneNumber',
+                v
+              )
+            }
+            placeholder="+1 555 123 4567"
+            helper="When a caller asks to speak to a real person, the AI receptionist transfers the call to this number. Leave blank to disable call transfer for this clinic."
+          />
+        </div>
+
+        <div className="md:col-span-2">
           <label htmlFor="clinic-about" className="ui-label">
             About the clinic
           </label>

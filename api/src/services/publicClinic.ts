@@ -21,6 +21,7 @@ export const publicClinicSelect = {
   clinicWebsite: true,
   clinicServices: true,
   clinicAbout: true,
+  handoffPhoneNumber: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.ClinicSelect;

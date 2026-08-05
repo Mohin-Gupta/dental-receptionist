@@ -29,6 +29,12 @@ model Clinic {
   clinicServices Json? // array of services offered
   clinicAbout    String? // short description
 
+  /// E.164 number the AI receptionist transfers a call to when the caller
+  /// asks for a human. Null/empty means no human handoff is configured for
+  /// this clinic (the transfer-destination-request webhook returns an error
+  /// and the assistant apologises instead of transferring).
+  handoffPhoneNumber String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
