@@ -503,9 +503,12 @@ async function processTransferDestinationRequest(
 
   return {
     destination: {
-      type: 'number',
+      type: 'number' as const,
       number: clinic.handoffPhoneNumber,
-      message: 'Sure, connecting you to our clinic team now. Please hold.',
+      message: {
+        type: 'request-start' as const,
+        message: 'Sure, connecting you to our clinic team now. Please hold.',
+      },
     },
   };
 }
