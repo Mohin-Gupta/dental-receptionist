@@ -469,43 +469,72 @@ async function processEndOfCall(message: any, tenant: Awaited<ReturnType<typeof 
   return { received: true };
 }
 
-/**
- * user-handoff: the caller asked to speak to an actual person. Vapi's
- * `transferCall` tool is configured with an empty `destinations` array in
- * the Vapi dashboard, so instead of a fixed number baked into the assistant,
- * Vapi asks this webhook where to send the call on every transfer attempt
- * (the `transfer-destination-request` server message). That fits this
- * app's shared-assistant-per-organization model: the same Vapi assistant is
- * reused across many clinics (see buildClinicVariables), so the destination
- * has to be resolved per-call from the clinic the tenant resolver already
- * mapped this call to, never from anything the caller or model supplies.
- *
- * Response shape is dictated by Vapi, not this app's ToolResponse contract:
- * it must be `{ destination: {...} }` or `{ error: string }` at the top
- * level (see https://docs.vapi.ai/phone-calling/dynamic-call-transfers).
- */
 async function processTransferDestinationRequest(
   tenant: Awaited<ReturnType<typeof resolveVapiTenant>>
 ) {
-  console.log("Transfer call function")
   const clinic = await prisma.clinic.findUnique({
     where: { id: tenant.clinicId },
-    select: { handoffPhoneNumber: true },
+    select: {
+      handoffPhoneNumber: true,
+    },
   });
-  console.log("We passed the typescript error")
+
   if (!clinic?.handoffPhoneNumber) {
-    // No destination is configured for this clinic. Vapi will surface this
-    // error to the assistant instead of transferring, so the assistant's
-    // system prompt should tell it to apologise and offer a callback when a
-    // transfer attempt fails, rather than silently going quiet.
-    return { error: 'No human handoff number is configured for this clinic.' };
+    return {
+      error: 'No human handoff number is configured for this clinic.',
+    };
   }
 
+  let handoffNumber: string;
+
+  try {
+    handoffNumber = toE164(
+      clinic.handoffPhoneNumber,
+      tenant.defaultCallingCode
+    );
+  } catch {
+    console.error('Invalid clinic handoff number', {
+      clinicId: tenant.clinicId,
+      callId: tenant.callId,
+    });
+
+    return {
+      error: 'The configured human handoff number is invalid.',
+    };
+  }
+
+  const configuredSipDomain = process.env.VOBIZ_SIP_DOMAIN?.trim();
+
+  if (!configuredSipDomain) {
+    console.error('VOBIZ_SIP_DOMAIN is not configured', {
+      clinicId: tenant.clinicId,
+      callId: tenant.callId,
+    });
+
+    return {
+      error: 'Human handoff is temporarily unavailable.',
+    };
+  }
+
+  const sipDomain = configuredSipDomain
+    .replace(/^sip:/i, '')
+    .replace(/\/+$/, '');
+
+  const destination = {
+    type: 'sip' as const,
+    sipUri: `sip:${handoffNumber}@${sipDomain}`,
+  };
+
+  console.info('Resolved Vapi transfer destination', {
+    callId: tenant.callId,
+    clinicId: tenant.clinicId,
+    destinationType: destination.type,
+    sipDomain,
+    destinationLast4: handoffNumber.slice(-4),
+  });
+
   return {
-    destination: {
-      type: 'number' as const,
-      number: clinic.handoffPhoneNumber,
-    },
+    destination,
     message: {
       type: 'request-start' as const,
       message: 'Sure, connecting you to our clinic team now.',
