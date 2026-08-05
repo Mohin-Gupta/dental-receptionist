@@ -58,13 +58,13 @@ const toolCallSchema = z.object({
   }).passthrough(),
 }).passthrough();
 
-// const webhookSchema = z.object({
-//   message: z.object({
-//     type: z.string().trim().min(1).max(100),
-//     call: z.object({ id: z.string().trim().min(1).max(200) }).passthrough().optional(),
-//     toolCallList: z.array(toolCallSchema).min(1).max(20).optional(),
-//   }).passthrough(),
-// }).passthrough();
+const webhookSchema = z.object({
+  message: z.object({
+    type: z.string().trim().min(1).max(100),
+    call: z.object({ id: z.string().trim().min(1).max(200) }).passthrough().optional(),
+    toolCallList: z.array(toolCallSchema).min(1).max(20).optional(),
+  }).passthrough(),
+}).passthrough();
 
 type ToolHandler = (
   clinicId: string,
@@ -511,15 +511,12 @@ async function processTransferDestinationRequest(
 }
 
 router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
-  // const parsed = webhookSchema.safeParse(req.body);
-  const parsed = req.body
-  // if (!parsed.success) {
-  //   return res.status(400).json({ error: 'Invalid webhook payload' });
-  // }
-  const controlUrl = parsed?.call?.monitor?.controlUrl;
-  // const message = parsed.data.message;
-  const message = parsed.message;
-  console.log(`The controlUrl is ${controlUrl}`);
+  const parsed = webhookSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid webhook payload' });
+  }
+
+  const message = parsed.data.message;
   console.log(`The type is ${message.type}`)
   console.log(`tool call list : ${message.toolCallList}`)
   if (message.type === 'tool-calls' && !message.toolCallList) {
@@ -606,7 +603,6 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     }
 
     await markWebhookProcessed(received.event, response);
-    console.log(`The response is ${res.json(response)}`)
     return res.json(response);
   } catch (error) {
     await markWebhookFailed(received.event.id, error);
