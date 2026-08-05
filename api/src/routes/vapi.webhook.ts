@@ -602,6 +602,7 @@ router.post('/webhook/vapi', requireMachineAuth, async (req, res) => {
     }
 
     await markWebhookProcessed(received.event, response);
+    console.log(`The response is ${response}`)
     return res.json(response);
   } catch (error) {
     await markWebhookFailed(received.event.id, error);
