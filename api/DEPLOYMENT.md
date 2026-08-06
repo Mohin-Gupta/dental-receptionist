@@ -331,8 +331,16 @@ For every inbound phone number, remove the fixed `assistantId` and `squadId`, co
 For platform-funded voice, set `PLATFORM_VAPI_ENABLED=true` and inject `PLATFORM_VAPI_API_KEY` from the deployment secret manager into both API and worker workloads. Never put that key in a tenant row or browser-visible variable. Bind a verified phone number and assistant with the operator-only command below; tenant endpoints cannot create, alter, deactivate, or rotate a platform-managed mapping. Globally unique provider resource IDs and the clinic-bound phone mapping remain the source of tenant attribution even though the provider balance is shared.
 
 ```bash
-npm run vapi:bind-platform -- --organization-id ORG_UUID --clinic-id CLINIC_UUID --phone-number-id VAPI_PHONE_ID --assistant-id VAPI_ASSISTANT_ID --assistant-scope organization --activate --confirm
+npm run vapi:bind-platform -- --organization-id ORG_UUID --clinic-id CLINIC_UUID --phone-number-id VAPI_PHONE_ID --assistant-id VAPI_ASSISTANT_ID --assistant-scope organization --sip-domain sip.example.com --activate --confirm
 ```
+
+`--sip-domain` is required and is stored on the phone-number `ProviderResource`,
+not an environment variable: it is the SIP domain the human-handoff transfer
+webhook uses to build `sip:<handoff-number>@<sip-domain>` for calls placed
+through this specific number. Because it is bound per phone number, different
+clinics or numbers can sit on different SIP trunks without any code or
+deployment change; rerunning the command with a different `--sip-domain`
+updates the stored value.
 
 The command verifies both resources through the platform key, requires them to report the same Vapi organization, verifies the dynamic phone-number admission Server URL and Custom Credential, requires the assistant's `maxDurationSeconds` to match `VAPI_MAX_INBOUND_CALL_SECONDS`, enforces the configured per-organization resource caps, writes an operator audit event, and is safe to rerun with the same assignment. Omit `--activate` to stage provisioning rows. It refuses to replace a tenant-owned Vapi account or move an active resource between clinics. Manual removal or reassignment should first stop new calls and drain/reconcile in-flight attempts; signed terminal reports continue using immutable historical attempt attribution after local deactivation.
 

@@ -20,6 +20,7 @@ import {
   resolveVapiTenant,
   VapiTenantResolutionError,
 } from '../services/vapiTenant';
+import { vapiPhoneResourceSipDomain } from '../services/providerProvisioning';
 import { recordProviderCost, recordUsageEvent, USAGE_METRICS } from '../billing/usage';
 import {
   assertCommercialFeatureAccess,
@@ -503,22 +504,23 @@ async function processTransferDestinationRequest(
     };
   }
 
-  const configuredSipDomain = process.env.VOBIZ_SIP_DOMAIN?.trim();
+  // The SIP domain lives on the phone-number ProviderResource's config (set
+  // by `npm run vapi:bind-platform -- --sip-domain ...`), not an environment
+  // variable, so each clinic's number can be bound to a different SIP trunk
+  // without any code or deployment change.
+  const sipDomain = vapiPhoneResourceSipDomain(tenant.resource.config);
 
-  if (!configuredSipDomain) {
-    console.error('VOBIZ_SIP_DOMAIN is not configured', {
+  if (!sipDomain) {
+    console.error('No SIP domain configured for this Vapi phone number', {
       clinicId: tenant.clinicId,
       callId: tenant.callId,
+      providerResourceId: tenant.resource.id,
     });
 
     return {
       error: 'Human handoff is temporarily unavailable.',
     };
   }
-
-  const sipDomain = configuredSipDomain
-    .replace(/^sip:/i, '')
-    .replace(/\/+$/, '');
 
   const destination = {
     type: 'sip' as const,

@@ -54,10 +54,38 @@ const twilioAccountConfigSchema = z.object({
   edge: z.string().trim().regex(/^[a-z0-9-]{1,32}$/).optional(),
 }).strict();
 
+// A bare hostname, optionally with a port (e.g. "sip.example.com" or
+// "sip.example.com:5061"). Tenant/operator input may include a leading
+// "sip:" scheme or trailing slash; normalizeSipDomain() strips those before
+// this pattern is checked so the stored value is always the canonical form
+// used to build the `sip:<number>@<domain>` transfer URI.
+const SIP_DOMAIN_PATTERN =
+  /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(:[0-9]{1,5})?$/;
+
+export function normalizeSipDomain(value: string): string {
+  return value.trim().replace(/^sip:/i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+export const sipDomainSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .transform(normalizeSipDomain)
+  .refine(
+    (value) => SIP_DOMAIN_PATTERN.test(value),
+    'SIP domain must be a valid hostname (optionally with a port), e.g. sip.example.com'
+  );
+
 const vapiPhoneConfigSchema = z.object({
   direction: z.enum(['inbound', 'outbound', 'both']).optional(),
   inboundAssistantId: vapiIdentifier.optional(),
   admissionVerifiedAt: z.string().datetime({ offset: true }).optional(),
+  /// The SIP domain used to build the `sip:<number>@<domain>` transfer URI
+  /// when a caller on this phone number is handed off to a human. Bound per
+  /// phone-number resource so different clinics/numbers can use different
+  /// SIP trunks without any code or environment-variable change.
+  sipDomain: sipDomainSchema.optional(),
 }).strict();
 
 const vapiAssistantConfigSchema = z.object({
@@ -261,6 +289,18 @@ export function parseResourceConfig(
     throw new Error('Unsupported provider resource type');
   }
   return schema.parse(value ?? {});
+}
+
+/**
+ * Reads the human-handoff SIP domain bound to a Vapi phone-number resource's
+ * config (see vapiPhoneConfigSchema.sipDomain). Returns null for missing or
+ * invalid config rather than throwing, since this is read on the hot call
+ * path and an operator/data problem should surface as a speakable "handoff
+ * unavailable" response, not a 500.
+ */
+export function vapiPhoneResourceSipDomain(config: unknown): string | null {
+  const parsed = vapiPhoneConfigSchema.safeParse(config ?? {});
+  return parsed.success ? parsed.data.sipDomain ?? null : null;
 }
 
 export function parseProviderCredentials(

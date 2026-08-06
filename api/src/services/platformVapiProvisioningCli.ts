@@ -6,6 +6,7 @@ import {
   isPlatformManagedVapiAccount,
   platformVapiExternalAccountId,
   configuredVapiWebhookUrl,
+  sipDomainSchema,
   vapiProviderOrganizationId,
   verifyPlatformVapiReceptionistConfiguration,
   verifyPlatformVapiResource,
@@ -19,6 +20,7 @@ const valueFlags = new Set([
   '--phone-display-name',
   '--assistant-display-name',
   '--assistant-scope',
+  '--sip-domain',
 ]);
 const booleanFlags = new Set(['--activate', '--confirm']);
 
@@ -30,6 +32,11 @@ const optionsSchema = z.object({
   phoneDisplayName: z.string().trim().min(1).max(160).optional(),
   assistantDisplayName: z.string().trim().min(1).max(160).optional(),
   assistantScope: z.enum(['organization', 'clinic']),
+  // The SIP domain this phone number's carrier/trunk uses for human handoff
+  // transfers, e.g. "sip.example.com". Stored on the phone-number
+  // ProviderResource so the transfer webhook never needs an environment
+  // variable and different numbers/clinics can use different SIP trunks.
+  sipDomain: sipDomainSchema,
   activate: z.boolean(),
   confirm: z.literal(true),
 }).strict();
@@ -262,6 +269,7 @@ async function main() {
               direction: 'both',
               inboundAssistantId: assistant.id,
               admissionVerifiedAt: new Date().toISOString(),
+              sipDomain: options.sipDomain,
             },
           },
         })
@@ -279,6 +287,7 @@ async function main() {
               direction: 'both',
               inboundAssistantId: assistant.id,
               admissionVerifiedAt: new Date().toISOString(),
+              sipDomain: options.sipDomain,
             },
           },
         });
@@ -319,6 +328,7 @@ async function main() {
           phoneResourceId: phoneResource.id,
           assistantResourceId: assistantResource.id,
           assistantScope: options.assistantScope,
+          sipDomain: options.sipDomain,
         },
       },
     });
