@@ -246,6 +246,24 @@ export interface BuildBolnaAgentConfigInput {
   maxDurationSeconds: number;
   systemPrompt?: string;
   welcomeMessage?: string;
+  /**
+   * Pass the EXISTING agent's tools_config.synthesizer/transcriber/
+   * multilingual_config and task_config (as returned by getBolnaAgent) when
+   * re-provisioning an agent that already has tuned voice/language/call
+   * settings — e.g. a dashboard-created agent — so this full-replace PUT
+   * doesn't flatten them back to plain defaults. Omit these for a genuinely
+   * new agent to get the Deepgram/English defaults below.
+   */
+  baseSynthesizer?: Record<string, unknown>;
+  baseTranscriber?: Record<string, unknown>;
+  multilingualConfig?: Record<string, unknown>;
+  /**
+   * Preserved as-is EXCEPT call_terminate, which always comes from
+   * maxDurationSeconds — that's a deliberate cost/safety ceiling tied to
+   * BOLNA_MAX_INBOUND_CALL_SECONDS and must never silently drift from
+   * whatever a dashboard edit last set it to.
+   */
+  taskConfigOverrides?: Record<string, unknown>;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a warm, efficient dental clinic receptionist speaking with a patient over the phone.
@@ -294,14 +312,22 @@ export function buildBolnaAgentConfig(input: BuildBolnaAgentConfigInput): Record
                 temperature: 0.2,
               },
             },
-            synthesizer: {
+            synthesizer: input.baseSynthesizer ?? {
               provider: 'deepgram',
-              provider_config: { voice: 'Asteria', model: 'aura-asteria-en' },
+              // Bolna's live validator requires provider_config.voice_id on
+              // every synthesizer (confirmed against a real dashboard-created
+              // agent's config, where Cartesia/ElevenLabs voices each carry
+              // their own opaque voice_id) even though the published
+              // DeepgramConfig schema doesn't list it. Deepgram's Aura voices
+              // have no separate opaque ID the way ElevenLabs/Cartesia do —
+              // the model string itself (e.g. "aura-asteria-en") is the voice
+              // identifier, so it's reused here as voice_id too.
+              provider_config: { voice: 'Asteria', model: 'aura-asteria-en', voice_id: 'aura-asteria-en' },
               stream: true,
               buffer_size: 150,
               audio_format: 'wav',
             },
-            transcriber: {
+            transcriber: input.baseTranscriber ?? {
               provider: 'deepgram',
               model: 'nova-3',
               language: 'en',
@@ -318,10 +344,14 @@ export function buildBolnaAgentConfig(input: BuildBolnaAgentConfigInput): Record
               tools,
               tools_params: toolsParams,
             },
+            ...(input.multilingualConfig ? { multilingual_config: input.multilingualConfig } : {}),
           },
           task_config: {
-            call_terminate: input.maxDurationSeconds,
             hangup_after_silence: 10,
+            ...(input.taskConfigOverrides ?? {}),
+            // Always wins over anything preserved above — see the interface
+            // doc comment on taskConfigOverrides for why.
+            call_terminate: input.maxDurationSeconds,
           },
         },
       ],

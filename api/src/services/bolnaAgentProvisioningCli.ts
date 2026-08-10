@@ -67,11 +67,41 @@ function configuredInteger(name: string, fallback: number, minimum: number, maxi
   return value;
 }
 
+function firstTask(agent: Record<string, unknown>): Record<string, unknown> | undefined {
+  const tasks = agent.tasks;
+  if (!Array.isArray(tasks) || tasks.length === 0) return undefined;
+  const task = tasks[0];
+  return task && typeof task === 'object' && !Array.isArray(task) ? (task as Record<string, unknown>) : undefined;
+}
+
+function objectField(source: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const value = source?.[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const webhookBaseUrl = requiredEnv('BOLNA_WEBHOOK_BASE_URL');
   const toolSharedSecret = requiredEnv('BOLNA_WEBHOOK_SECRET');
   const maxDurationSeconds = configuredInteger('BOLNA_MAX_INBOUND_CALL_SECONDS', 900, 60, 7_200);
+
+  // When updating an existing agent, read back its current tools_config so
+  // this full-replace PUT preserves whatever voice/language/call-behavior
+  // tuning is already on it (e.g. a dashboard-created agent's multilingual
+  // setup) instead of flattening it to plain defaults. See the doc comment
+  // on BuildBolnaAgentConfigInput in bolnaAgentBlueprint.ts.
+  let existingTask: Record<string, unknown> | undefined;
+  if (options.agentId) {
+    const existing = await getBolnaAgent(options.agentId); // also confirms the agent exists/is ours before overwriting it
+    existingTask = firstTask(existing);
+    const existingToolsConfig = objectField(existingTask, 'tools_config');
+    console.log('Preserving existing voice/language/task settings from agent', {
+      agentId: options.agentId,
+      synthesizerProvider: objectField(existingToolsConfig, 'synthesizer')?.provider ?? null,
+      multilingualEnabled: objectField(existingToolsConfig, 'multilingual_config')?.enabled ?? false,
+    });
+  }
+  const existingToolsConfig = objectField(existingTask, 'tools_config');
 
   const config = buildBolnaAgentConfig({
     agentName: options.agentName,
@@ -79,10 +109,13 @@ async function main() {
     executionWebhookUrl: `${webhookBaseUrl.replace(/\/+$/, '')}/execution`,
     toolSharedSecret,
     maxDurationSeconds,
+    baseSynthesizer: objectField(existingToolsConfig, 'synthesizer'),
+    baseTranscriber: objectField(existingToolsConfig, 'transcriber'),
+    multilingualConfig: objectField(existingToolsConfig, 'multilingual_config'),
+    taskConfigOverrides: objectField(existingTask, 'task_config'),
   });
 
   if (options.agentId) {
-    await getBolnaAgent(options.agentId); // confirms the agent exists/is ours before overwriting its tools
     await updateBolnaAgent(options.agentId, config);
     console.log('Updated existing Bolna agent', { agentId: options.agentId });
   } else {
