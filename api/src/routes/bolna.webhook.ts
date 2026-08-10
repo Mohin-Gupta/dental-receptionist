@@ -107,6 +107,27 @@ function stripSystemContext(body: Record<string, unknown>): Record<string, unkno
   return clone;
 }
 
+/**
+ * Bolna's %(field)s tool-param templating always sends every declared
+ * parameter, filling in an empty string when the LLM had nothing to supply
+ * for an optional field on this turn — unlike Vapi's function-calling,
+ * which simply omits the key. The shared Zod schemas in vapiToolSchemas.ts
+ * mark those fields `.optional()` meaning "key may be absent", not "value
+ * may be empty", so an empty string still fails e.g. `.min(1)`. Dropping
+ * empty-string keys here (Bolna-only, so Vapi's parsing is untouched)
+ * before validation makes "nothing supplied" behave the same way for both
+ * providers. A still-required field (e.g. date) left empty this way
+ * correctly still fails validation — just as "missing", which is accurate.
+ */
+export function dropBolnaEmptyStrings(body: Record<string, unknown>): Record<string, unknown> {
+  const clone: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (value === '') continue;
+    clone[key] = value;
+  }
+  return clone;
+}
+
 const APOLOGY_SAY =
   'This clinic service is temporarily unavailable. Apologise to the patient in their current language, do not perform the requested action, and offer a clinic staff callback.';
 
@@ -303,7 +324,7 @@ router.post('/webhook/bolna/tools/:toolName', requireBolnaMachineAuth, async (re
 
   let response: ToolResponse;
   try {
-    const parameters = parameterSchema.parse(stripSystemContext(body));
+    const parameters = parameterSchema.parse(dropBolnaEmptyStrings(stripSystemContext(body)));
     response = await handler(tenant.clinicId, tenant.callId, parameters, fromNumber);
   } catch (error) {
     if (error instanceof z.ZodError) {

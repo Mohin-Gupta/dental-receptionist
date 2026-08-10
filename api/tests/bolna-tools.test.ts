@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { VAPI_TOOL_PARAMETER_SCHEMAS } from '../src/services/vapiToolSchemas';
-import { REQUIRED_RECEPTIONIST_VAPI_TOOLS } from '../src/services/providerProvisioning';
 import {
   extractBolnaCallId,
   extractBolnaCostUsd,
   extractBolnaDurationSecs,
+  dropBolnaEmptyStrings,
   TERMINAL_BOLNA_STATUSES,
 } from '../src/routes/bolna.webhook';
+import { REQUIRED_RECEPTIONIST_VAPI_TOOLS } from '../src/services/providerProvisioning';
+import { VAPI_TOOL_PARAMETER_SCHEMAS } from '../src/services/vapiToolSchemas';
 
 // bolna.webhook.ts reuses VAPI_TOOL_PARAMETER_SCHEMAS (imported there as
 // TOOL_PARAMETER_SCHEMAS) for every business tool it dispatches, so the same
@@ -49,11 +50,28 @@ test('extractBolnaCostUsd reads total_cost first, then legacy cost fields', () =
   assert.equal(extractBolnaCostUsd({ total_cost: -1 }), null);
 });
 
-test("TERMINAL_BOLNA_STATUSES gates billing finalization to Bolna's known-terminal call statuses", () => {
+test('TERMINAL_BOLNA_STATUSES gates billing finalization to Bolna\'s known-terminal call statuses', () => {
   for (const status of ['completed', 'error', 'busy', 'no-answer', 'failed']) {
     assert.equal(TERMINAL_BOLNA_STATUSES.has(status), true, `${status} should be terminal`);
   }
   for (const status of ['queued', 'ringing', 'in-progress']) {
     assert.equal(TERMINAL_BOLNA_STATUSES.has(status), false, `${status} should not be terminal`);
   }
+});
+
+// Regression test for the exact bug reported live: confirmDetails (and any
+// other tool with optional fields) failing INVALID_REQUEST even when every
+// field the caller actually needed to supply was present, because Bolna's
+// %(field)s templating sends unset optional fields as '' rather than
+// omitting the key the way Vapi's function-calling does.
+test('dropBolnaEmptyStrings removes empty-string keys but keeps everything else, including falsy non-empty values', () => {
+  assert.deepEqual(
+    dropBolnaEmptyStrings({ date: '2026-08-15', time: '3:00 PM', reason: '', patientName: '', patientPhone: '' }),
+    { date: '2026-08-15', time: '3:00 PM' }
+  );
+  assert.deepEqual(
+    dropBolnaEmptyStrings({ doctorId: '', count: 0, active: false }),
+    { count: 0, active: false },
+    'zero and false are real supplied values, not "empty", and must survive'
+  );
 });
