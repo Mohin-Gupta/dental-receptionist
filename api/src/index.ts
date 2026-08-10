@@ -15,6 +15,7 @@ import integrationAuthRoutes from './routes/auth';
 import dashboardRoutes from './routes/dashboard';
 import twilioWebhook from './routes/twilio.webhook';
 import vapiWebhook from './routes/vapi.webhook';
+import bolnaWebhook from './routes/bolna.webhook';
 import { providerWebhookRateLimit } from './auth/rateLimit';
 import operationsRoutes from './routes/operations.routes';
 import { assertFreshWorkerHeartbeat } from './ops/workerHeartbeat';
@@ -113,6 +114,7 @@ app.get('/health/ready', async (_req, res) => {
 // Public provider webhooks perform their own cryptographic authentication.
 // Keep them ahead of session-authenticated application routes.
 app.use('/api', vapiWebhook);
+app.use('/api', bolnaWebhook);
 app.use('/api', twilioWebhook);
 app.use('/api', billingRoutes);
 app.use('/api', operationsRoutes);

@@ -348,6 +348,49 @@ Do not enable legacy global provider variables. Encrypted transcript extraction 
 
 Set `VAPI_MAX_OUTBOUND_CALL_SECONDS` as the outbound call and pre-authorization ceiling. Set `VAPI_MAX_INBOUND_CALL_SECONDS` to exactly the `maxDurationSeconds` configured on every active Vapi assistant; otherwise the reserved budget can differ from the provider-enforced maximum. Both values accept 60–7200 seconds. Provider limits are defense in depth: subscription entitlements, tenant budgets, and usage reconciliation still control billable access in the application.
 
+### Bolna + Vobiz (added alongside Vapi, not replacing it)
+
+Bolna is being migrated to side by side with Vapi for cost reasons, with the human-handoff transfer deliberately routed through Vobiz's own Transfer API rather than Bolna's built-in Transfer Call tool (which only supports a single static destination number per tool, configured at agent-setup time — not viable per-clinic). Vapi's code, resources, and production traffic are untouched by this section; both providers can run concurrently, per organization.
+
+**Several parts of this integration were built against Bolna's and Vobiz's published documentation but could not be verified against a live account at write time.** Each is called out at the point it matters below, and again as code comments in the referenced file. Do not treat any of these as settled until confirmed with one real test call:
+
+- Whether Bolna's auto-injected `call_sid` value, for a call routed through Vobiz, is actually the same identifier as Vobiz's own `call_uuid` (`vobizClient.ts`, `bolna.webhook.ts`'s `handleTransferToHuman`). The entire human-handoff transfer depends on this.
+- The exact request/response shape of Vobiz's Transfer API endpoint (`vobizClient.ts`) — Vobiz's docs describe the mechanism in prose, not a literal curl example the way their DTMF and Make Call docs do.
+- The `input`/`output` telephony `provider` value for Vobiz in Bolna's v2 agent schema (`bolnaAgentBlueprint.ts` defaults to `'vobiz'`; `'plivo'` is the documented fallback).
+- The GET/PATCH single-agent Bolna API endpoints (`bolnaClient.ts`) — only the POST create endpoint's schema was directly retrievable.
+- The exact field names in Bolna's execution/status webhook payload for call duration and cost (`bolna.webhook.ts`'s `extractBolnaDurationSecs`/`extractBolnaCostUsd`) — only that the payload matches Bolna's Get Execution API shape, not its literal fields.
+- Whether Bolna substitutes an empty string, omits the key, or sends something else for an optional tool parameter the LLM didn't collect — affects the Zod parsing in `bolna.webhook.ts`, which currently only special-cases `''`/`null` (mirroring what was already defensively handled for Vapi).
+
+**One-time setup, done once per Bolna account, in Bolna's own dashboard (no API found for this step):** under Bolna's "Providers" section, connect your Vobiz Auth ID and Auth Token. This is what lets Bolna route calls for Vobiz-purchased numbers and surfaces those numbers in Bolna's own phone-number inventory. Use the *same* Vobiz account for `PLATFORM_VOBIZ_AUTH_ID`/`PLATFORM_VOBIZ_AUTH_TOKEN` below, since the human-handoff transfer calls Vobiz directly against that same account.
+
+**Provisioning a clinic:**
+
+1. Purchase/import the clinic's number into Bolna's inventory (surfaced there via the Vobiz provider link above).
+2. Create or update the shared receptionist agent's tools/prompt (safe to rerun; this is what wires up every tool — checkAvailability, bookAppointment, transferToHuman, etc. — to `BOLNA_WEBHOOK_BASE_URL`):
+
+   ```bash
+   npm run bolna:provision-agent -- --agent-name "Maya" --confirm
+   # Prints the created agent_id. Pass --agent-id <id> on future runs to update it in place.
+   ```
+
+3. Bind the clinic's number to that agent:
+
+   ```bash
+   npm run bolna:bind-platform -- \
+     --organization-id ORG_UUID --clinic-id CLINIC_UUID \
+     --agent-id BOLNA_AGENT_ID --bolna-phone-number-id BOLNA_PHONE_ID \
+     --phone-number +91XXXXXXXXXX --phone-display-name "Clinic main line" \
+     --activate --confirm
+   ```
+
+   Unlike Vapi, one shared agent can serve every clinic in an organization: each tool call carries the dialled `to_number` as a system value, and `bolnaTenant.ts` resolves the clinic from it per call — there is no per-call "which assistant" decision the way Vapi's `assistant-request` makes one, because Bolna's inbound routing is a static, one-time binding (step 3 above).
+
+Set `PLATFORM_BOLNA_ENABLED=true`, `PLATFORM_BOLNA_API_KEY`, `BOLNA_WEBHOOK_BASE_URL`, and `BOLNA_WEBHOOK_SECRET` (see [`.env.example`](./.env.example)) in both API and worker before provisioning. Set `PLATFORM_VOBIZ_ENABLED=true` with `PLATFORM_VOBIZ_AUTH_ID`/`PLATFORM_VOBIZ_AUTH_TOKEN` for the transfer path. `BOLNA_MAX_INBOUND_CALL_SECONDS` mirrors `VAPI_MAX_INBOUND_CALL_SECONDS` and is also used as `task_config.call_terminate` when (re)provisioning the agent.
+
+Bolna's outbound-call path (`bolnaOutbound.ts`, `placeBolnaOutboundCall`) is implemented and ready but **not yet wired into any queue job** — `sixtyMinReminderJob.ts`, `feedbackSmsJob.ts`, and the other reminder jobs still call Vapi's outbound path directly. Switching a job over is a small, isolated follow-up once Bolna inbound calling and the Vobiz transfer are verified end to end; it was deliberately not done as part of this pass to avoid touching currently-working Vapi reminder flows.
+
+Bolna has no pre-connection gating webhook the way Vapi's `assistant-request` does — commercial access (subscription/budget checks) is enforced at the first tool-call webhook instead, the earliest point Bolna's API gives us. A fully commercially-blocked tenant's Bolna calls will therefore still ring and consume Bolna/Vobiz minutes even though every tool call will decline to help, unlike Vapi which can be hard-rejected before the call connects. Factor this into cost-cutting decisions, not just per-minute pricing.
+
 ### Twilio
 
 Outbound messages set their status callback to `POST https://api.example.com/api/webhook/twilio/message-status`. Configure each Messaging Service/number inbound webhook as `POST https://api.example.com/api/webhook/twilio/inbound`, enable Advanced Opt-Out, and ensure it forwards `OptOutType`. The application stores organization-wide HMAC-addressed STOP/START preferences and checks them before dispatch; Twilio's own block list remains the final race-safe enforcement layer. Post-visit feedback requires a recorded START/opt-in, while appointment notices block known opt-outs.

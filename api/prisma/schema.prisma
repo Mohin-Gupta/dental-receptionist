@@ -486,6 +486,11 @@ model CallLog {
   patientId          String?
   appointmentId      String?
   vapiCallId         String    @unique
+  /// Generic, provider-agnostic call identifier for non-Vapi providers
+  /// (starting with Bolna). Kept as a separate nullable column rather than
+  /// repurposing or renaming vapiCallId, so existing Vapi code paths and rows
+  /// are untouched. See migration add_call_log_provider_call_id.
+  providerCallId     String?   @unique
   direction          String    @default("inbound")
   durationSecs       Int?
   // confidenceScore Float?

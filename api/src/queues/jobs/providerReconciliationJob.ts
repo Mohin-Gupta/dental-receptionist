@@ -6,6 +6,7 @@ import {
   decryptProviderCredentials,
   vapiProviderOrganizationId,
 } from '../../services/providerProvisioning';
+import { BOLNA_API_BASE, platformBolnaApiKey } from '../../services/bolnaClient';
 
 const TWILIO_STATUS_RANK = {
   accepted: 10,
@@ -65,6 +66,26 @@ const VAPI_TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled']);
 const VAPI_RECONCILABLE_STATUSES = Object.keys(VAPI_STATUS_RANK).filter(
   status => !VAPI_TERMINAL_STATUSES.has(status)
 );
+
+// Mirrors TERMINAL_BOLNA_STATUSES in bolna.webhook.ts. Non-terminal values
+// (queued/ringing/in-progress) are the ones a call can still be sitting in
+// when it goes stale and needs reconciling; Bolna's terminal set is smaller
+// than Vapi's (no separate "canceled" from "failed" distinction reported
+// here) so failed/busy/no-answer/error all just rank as done.
+const BOLNA_STATUS_RANK: Record<string, number> = {
+  queued: 0,
+  ringing: 10,
+  'in-progress': 20,
+  completed: 100,
+  error: 100,
+  busy: 100,
+  'no-answer': 100,
+  failed: 100,
+};
+const BOLNA_TERMINAL_STATUSES = new Set(['completed', 'error', 'busy', 'no-answer', 'failed']);
+const BOLNA_RECONCILABLE_STATUSES = Object.keys(BOLNA_STATUS_RANK).filter(
+  status => !BOLNA_TERMINAL_STATUSES.has(status)
+);
 const MAX_DATABASE_BIGINT = 9_223_372_036_854_775_807n;
 
 const attemptInclude = Prisma.validator<Prisma.CommunicationAttemptInclude>()({
@@ -77,7 +98,7 @@ type ReconciliationAttempt = Prisma.CommunicationAttemptGetPayload<{
   include: typeof attemptInclude;
 }>;
 
-type ReconciliationProvider = 'twilio' | 'vapi';
+type ReconciliationProvider = 'twilio' | 'vapi' | 'bolna';
 
 interface ReconciliationConfig {
   batchSize: number;
@@ -295,7 +316,8 @@ function validateAttemptAttribution(attempt: ReconciliationAttempt): void {
 
   if (
     (attempt.provider === 'twilio' && !['phone_number', 'messaging_service'].includes(resource.resourceType)) ||
-    (attempt.provider === 'vapi' && resource.resourceType !== 'phone_number')
+    (attempt.provider === 'vapi' && resource.resourceType !== 'phone_number') ||
+    (attempt.provider === 'bolna' && resource.resourceType !== 'phone_number')
   ) {
     throw new SafeReconciliationError('provider_resource_invalid');
   }
@@ -978,6 +1000,211 @@ async function reconcileVapiAttempt(
   };
 }
 
+async function fetchBolnaExecution(
+  executionId: string,
+  config: ReconciliationConfig,
+  deadlineAt: number
+): Promise<Record<string, unknown>> {
+  const apiKey = platformBolnaApiKey();
+  return withProviderRetry(async () => {
+    let response: Response;
+    try {
+      response = await fetch(`${BOLNA_API_BASE}/executions/${encodeURIComponent(executionId)}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(config.providerTimeoutMs),
+      });
+    } catch {
+      throw new SafeReconciliationError('provider_network_error', true);
+    }
+
+    if (!response.ok) {
+      const status = response.status;
+      await response.body?.cancel();
+      if (status === 401 || status === 403) {
+        throw new SafeReconciliationError('credentials_rejected');
+      }
+      if (status === 404) throw new SafeReconciliationError('provider_record_not_found');
+      if (status === 408 || status === 429 || status >= 500) {
+        throw new SafeReconciliationError('provider_temporarily_unavailable', true);
+      }
+      throw new SafeReconciliationError('provider_request_rejected');
+    }
+    return readBoundedJsonObject(response, config.providerResponseMaxBytes);
+  }, config, deadlineAt);
+}
+
+function bolnaTelephonyData(payload: Record<string, unknown>): Record<string, unknown> {
+  const telephony = payload.telephony_data;
+  return telephony && typeof telephony === 'object' && !Array.isArray(telephony)
+    ? telephony as Record<string, unknown>
+    : {};
+}
+
+// Field names confirmed against Bolna's GET /executions/{execution_id}
+// response shape (conversation_time, total_cost, telephony_data.duration) —
+// same source used to (re)confirm the webhook-side extraction helpers in
+// bolna.webhook.ts.
+function bolnaDurationSeconds(payload: Record<string, unknown>): number | null {
+  const direct = finiteNonNegative(payload.conversation_time);
+  if (direct !== null && direct > 0 && direct <= 86_400) return Math.round(direct);
+  const telephonyDuration = finiteNonNegative(bolnaTelephonyData(payload).duration);
+  return telephonyDuration !== null && telephonyDuration > 0 && telephonyDuration <= 86_400
+    ? Math.round(telephonyDuration)
+    : null;
+}
+
+function bolnaCostUsd(payload: Record<string, unknown>): number | null {
+  const direct = finiteNonNegative(payload.total_cost);
+  if (direct !== null) return direct;
+  const breakdown = payload.cost_breakdown;
+  if (breakdown && typeof breakdown === 'object' && !Array.isArray(breakdown)) {
+    const values = Object.values(breakdown as Record<string, unknown>)
+      .map(value => finiteNonNegative(value));
+    if (values.length > 0 && values.every(value => value !== null)) {
+      return (values as number[]).reduce((total, value) => total + value, 0);
+    }
+  }
+  return null;
+}
+
+function normalizeBolnaStatus(value: unknown): string | null {
+  const raw = nonEmptyString(value)?.toLowerCase();
+  return raw && raw in BOLNA_STATUS_RANK ? raw : null;
+}
+
+/** Pure transition helper used by reconciliation and suitable for focused tests. */
+export function nextBolnaReconciledStatus(current: string, incoming: string | null): string {
+  if (!incoming) return current;
+  const normalizedCurrent = current.toLowerCase();
+  if (BOLNA_TERMINAL_STATUSES.has(normalizedCurrent)) return current;
+  const currentRank = BOLNA_STATUS_RANK[normalizedCurrent] ?? 0;
+  const incomingRank = BOLNA_STATUS_RANK[incoming];
+  return incomingRank !== undefined && incomingRank >= currentRank ? incoming : current;
+}
+
+async function reconcileBolnaAttempt(
+  attempt: ReconciliationAttempt,
+  claimedAt: Date,
+  reconciliationRunId: string,
+  config: ReconciliationConfig,
+  deadlineAt: number
+): Promise<ReconciledAttemptResult> {
+  const resource = attempt.providerResource!;
+  if (!attempt.externalId) throw new SafeReconciliationError('external_id_missing');
+
+  // Bolna's platform-managed accounts never store tenant credentials (see
+  // providerProvisioning.ts's bolnaAccountConfigSchema comment) — the real
+  // key always comes from PLATFORM_BOLNA_API_KEY via platformBolnaApiKey(),
+  // never from decryptProviderCredentials() the way Twilio/Vapi do.
+  let execution: Record<string, unknown>;
+  try {
+    execution = await fetchBolnaExecution(attempt.externalId, config, deadlineAt);
+  } catch (error) {
+    if (error instanceof SafeReconciliationError) throw error;
+    throw new SafeReconciliationError('provider_credentials_invalid');
+  }
+  if (nonEmptyString(execution.id) !== attempt.externalId) {
+    throw new SafeReconciliationError('provider_record_attribution_invalid');
+  }
+  const telephony = bolnaTelephonyData(execution);
+  const toNumber = nonEmptyString(telephony.to_number);
+  if (toNumber && toNumber !== resource.externalId) {
+    throw new SafeReconciliationError('provider_record_resource_invalid');
+  }
+  const callType = nonEmptyString(telephony.call_type);
+  if (
+    (callType === 'outbound' && attempt.direction !== 'outbound') ||
+    (callType === 'inbound' && attempt.direction !== 'inbound')
+  ) {
+    throw new SafeReconciliationError('provider_record_direction_invalid');
+  }
+
+  const incomingStatus = normalizeBolnaStatus(execution.status);
+  const effectiveStatus = nextBolnaReconciledStatus(attempt.status, incomingStatus);
+  const final = incomingStatus ? BOLNA_TERMINAL_STATUSES.has(incomingStatus) : false;
+  const durationSeconds = final ? bolnaDurationSeconds(execution) : null;
+  const occurredAt = validDate(execution.updated_at) ?? new Date();
+
+  const updated = await prisma.communicationAttempt.updateMany({
+    where: {
+      id: attempt.id,
+      organizationId: attempt.organizationId,
+      providerResourceId: resource.id,
+      updatedAt: claimedAt,
+    },
+    data: {
+      status: effectiveStatus,
+      ...(durationSeconds !== null ? { durationSeconds } : {}),
+      ...(effectiveStatus === 'failed' ? {} : { errorMessage: null }),
+      ...(final && !attempt.endedAt ? { endedAt: occurredAt } : {}),
+      response: {
+        ...asJsonObject(attempt.response),
+        id: attempt.externalId,
+        status: effectiveStatus,
+        reconciledFrom: 'execution_resource',
+      },
+    },
+  });
+
+  let usageEventId: string | null = null;
+  let usageEnsured = false;
+  let usageMismatch = false;
+  if (final && durationSeconds !== null && durationSeconds > 0) {
+    const usage = await ensureUsage({
+      attempt,
+      metric: USAGE_METRICS.VOICE_SECONDS,
+      quantity: durationSeconds,
+      unit: 'second',
+      source: 'bolna_execution_resource',
+      externalEventId: attempt.externalId,
+      idempotencyKey: `bolna:${attempt.externalId}:voice-seconds`,
+      occurredAt,
+    });
+    usageEventId = usage.id;
+    usageEnsured = usage.ensured;
+    usageMismatch = usage.mismatch;
+  }
+
+  let costEnsured = false;
+  let costMismatch = false;
+  const costUsd = final ? bolnaCostUsd(execution) : null;
+  const amountMicros = costUsd === null ? null : usdCostMicros(costUsd);
+  if (amountMicros !== null) {
+    const cost = await ensureCost({
+      attempt,
+      reconciliationRunId,
+      provider: 'bolna',
+      costType: 'voice_call',
+      quantity: durationSeconds && durationSeconds > 0 ? durationSeconds : undefined,
+      unit: durationSeconds && durationSeconds > 0 ? 'second' : undefined,
+      amountMicros,
+      currency: 'USD',
+      externalEventId: attempt.externalId,
+      idempotencyKey: `${attempt.externalId}:reported-cost`,
+      occurredAt,
+      usageEventId,
+    });
+    costEnsured = cost.ensured;
+    costMismatch = cost.mismatch;
+  }
+
+  if (final) {
+    await prisma.communicationAttempt.updateMany({
+      where: { id: attempt.id, organizationId: attempt.organizationId },
+      data: { usageFinalizedAt: new Date() },
+    });
+  }
+
+  return {
+    providerRecordFetched: true,
+    attemptUpdated: updated.count === 1,
+    usageEnsured,
+    costEnsured,
+    usageMismatch,
+    costMismatch,
+  };
+}
+
 function candidateWhere(now: Date, config: ReconciliationConfig): Prisma.CommunicationAttemptWhereInput {
   const staleBefore = new Date(now.getTime() - config.staleAfterMs);
   const createdAfter = new Date(now.getTime() - config.lookbackMs);
@@ -1020,6 +1247,24 @@ function candidateWhere(now: Date, config: ReconciliationConfig): Prisma.Communi
           {
             providerCostEntries: {
               none: { provider: 'vapi', costType: 'voice_call' },
+            },
+          },
+        ],
+      },
+      {
+        provider: 'bolna',
+        channel: 'voice',
+        OR: [
+          { usageFinalizedAt: null },
+          { status: { in: BOLNA_RECONCILABLE_STATUSES } },
+          { durationSeconds: null },
+          {
+            durationSeconds: { gt: 0 },
+            usageEvents: { none: { metric: USAGE_METRICS.VOICE_SECONDS } },
+          },
+          {
+            providerCostEntries: {
+              none: { provider: 'bolna', costType: 'voice_call' },
             },
           },
         ],
@@ -1103,7 +1348,7 @@ export async function reconcileStaleProviderAttempts(
         break;
       }
       const first = group[0];
-      if (!first || !['twilio', 'vapi'].includes(first.provider)) continue;
+      if (!first || !['twilio', 'vapi', 'bolna'].includes(first.provider)) continue;
       const provider = first.provider as ReconciliationProvider;
       const run = await prisma.reconciliationRun.create({
         data: {
@@ -1167,7 +1412,9 @@ export async function reconcileStaleProviderAttempts(
           validateAttemptAttribution(attempt);
           const reconciled = provider === 'twilio'
             ? await reconcileTwilioAttempt(attempt, claimedAt, run.id, config, deadlineAt)
-            : await reconcileVapiAttempt(attempt, claimedAt, run.id, config, deadlineAt);
+            : provider === 'vapi'
+              ? await reconcileVapiAttempt(attempt, claimedAt, run.id, config, deadlineAt)
+              : await reconcileBolnaAttempt(attempt, claimedAt, run.id, config, deadlineAt);
           if (reconciled.providerRecordFetched) {
             runCounts.fetched += 1;
             result.providerRecordsFetched += 1;

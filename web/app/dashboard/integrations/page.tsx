@@ -67,7 +67,21 @@ function statusClass(status: string) {
 }
 
 function providerTitle(provider: IntegrationProvider): string {
-  return provider === 'vapi' ? 'Vapi voice' : 'Twilio messaging';
+  if (provider === 'vapi') return 'Vapi voice';
+  if (provider === 'bolna') return 'Bolna voice';
+  return 'Twilio messaging';
+}
+
+function providerBadgeLabel(provider: IntegrationProvider): string {
+  if (provider === 'vapi') return 'V';
+  if (provider === 'bolna') return 'B';
+  return 'T';
+}
+
+function providerBadgeClass(provider: IntegrationProvider): string {
+  if (provider === 'vapi') return 'bg-[#ece8fa] text-[#6754a8]';
+  if (provider === 'bolna') return 'bg-[#e7f0fb] text-[#2f5fa8]';
+  return 'bg-[#fcebea] text-[#ba3c36]';
 }
 
 function resourceLabel(resourceType: string): string {
@@ -507,8 +521,8 @@ export default function IntegrationsPage() {
             <section key={account.id} className="surface-card overflow-hidden">
               <div className="flex flex-col gap-4 border-b border-line p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
                 <div className="flex items-start gap-3">
-                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-sm font-extrabold ${account.provider === 'vapi' ? 'bg-[#ece8fa] text-[#6754a8]' : 'bg-[#fcebea] text-[#ba3c36]'}`} aria-hidden="true">
-                    {account.provider === 'vapi' ? 'V' : 'T'}
+                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-sm font-extrabold ${providerBadgeClass(account.provider)}`} aria-hidden="true">
+                    {providerBadgeLabel(account.provider)}
                   </span>
                   <div>
                   <div className="flex flex-wrap items-center gap-2">

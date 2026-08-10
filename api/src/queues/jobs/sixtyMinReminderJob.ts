@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma';
 import { sendSMS } from '../../services/twilio';
-import { placeOutboundCall } from '../../services/vapiOutbound';
+import { placeBolnaOutboundCall } from '../../services/bolnaOutbound';
 import { formatInTimezone, isWithinHours } from '../../lib/timezone';
 
 interface SixtyMinReminderJobData {
@@ -29,13 +29,20 @@ export async function runSixtyMinReminderJob(
 
   if (isWithinHours(timezone, 8, 21)) {
     try {
-      await placeOutboundCall(
+      // Voice reminders now dispatch through Bolna instead of Vapi. The
+      // idempotency key gets a distinct `:bolna:` segment (rather than
+      // reusing the old `:voice:v1` key) so this never collides with a
+      // pre-existing Vapi-provider CommunicationAttempt row for the same
+      // appointment from before this switch — placeBolnaOutboundCall would
+      // otherwise reject the reused key as "idempotency key was reused for
+      // a different operation" because the stored provider wouldn't match.
+      await placeBolnaOutboundCall(
         {
           organizationId: appointment.organizationId,
           clinicId: appointment.clinicId,
           appointmentId: appointment.id,
           patientId: appointment.patientId,
-          idempotencyKey: `appointment:${appointment.id}:60min-reminder:voice:v1`,
+          idempotencyKey: `appointment:${appointment.id}:60min-reminder:voice:bolna:v1`,
           purpose: 'appointment_reminder',
           defaultCallingCode: appointment.clinic.defaultCallingCode,
         },

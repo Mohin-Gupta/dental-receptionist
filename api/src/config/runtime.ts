@@ -107,6 +107,18 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
   ) {
     throw new Error('PLATFORM_VAPI_ENABLED must be true or false');
   }
+  if (
+    process.env.PLATFORM_BOLNA_ENABLED &&
+    !['true', 'false'].includes(process.env.PLATFORM_BOLNA_ENABLED)
+  ) {
+    throw new Error('PLATFORM_BOLNA_ENABLED must be true or false');
+  }
+  if (
+    process.env.PLATFORM_VOBIZ_ENABLED &&
+    !['true', 'false'].includes(process.env.PLATFORM_VOBIZ_ENABLED)
+  ) {
+    throw new Error('PLATFORM_VOBIZ_ENABLED must be true or false');
+  }
 
   requireValues([
     'WEB_ORIGIN',
@@ -145,6 +157,16 @@ export function validateRuntimeConfiguration(processRole: 'api' | 'worker' = 'ap
   requireSecretLength('VAPI_HMAC_SECRET');
   if (process.env.PLATFORM_VAPI_ENABLED === 'true') {
     requireValues(['PLATFORM_VAPI_API_KEY']);
+  }
+  // Bolna and Vobiz are added side by side with Vapi, not replacing it, and
+  // are off by default — these checks only bite once an operator opts in,
+  // exactly mirroring PLATFORM_VAPI_ENABLED above, so existing Vapi-only
+  // production deployments are unaffected until Bolna is actually enabled.
+  if (process.env.PLATFORM_BOLNA_ENABLED === 'true') {
+    requireValues(['PLATFORM_BOLNA_API_KEY', 'BOLNA_WEBHOOK_SECRET', 'BOLNA_WEBHOOK_BASE_URL']);
+  }
+  if (process.env.PLATFORM_VOBIZ_ENABLED === 'true') {
+    requireValues(['PLATFORM_VOBIZ_AUTH_ID', 'PLATFORM_VOBIZ_AUTH_TOKEN']);
   }
 
   // Parse and exercise the active key now, before the process accepts traffic.

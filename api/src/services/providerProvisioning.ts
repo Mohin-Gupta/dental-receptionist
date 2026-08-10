@@ -4,7 +4,7 @@ import twilio from 'twilio';
 import { z } from 'zod';
 import { decryptSecret, encryptSecret, isEncryptedSecret } from '../auth/secretBox';
 
-export const providerSchema = z.enum(['vapi', 'twilio']);
+export const providerSchema = z.enum(['vapi', 'twilio', 'bolna']);
 export type SupportedProvider = z.infer<typeof providerSchema>;
 
 export const accountStatusSchema = z.enum(['provisioning', 'active', 'inactive']);
@@ -54,6 +54,14 @@ const twilioAccountConfigSchema = z.object({
   edge: z.string().trim().regex(/^[a-z0-9-]{1,32}$/).optional(),
 }).strict();
 
+// Bolna platform accounts never store tenant credentials directly (the real
+// PLATFORM_BOLNA_API_KEY stays in env vars, exactly like Vapi's platform
+// mode) — this schema exists purely so parseAccountConfig()/health checks
+// below don't misclassify a Bolna ProviderAccount row as invalid.
+const bolnaAccountConfigSchema = z.object({
+  credentialSource: z.literal('platform').optional().default('platform'),
+}).strict();
+
 // A bare hostname, optionally with a port (e.g. "sip.example.com" or
 // "sip.example.com:5061"). Tenant/operator input may include a leading
 // "sip:" scheme or trailing slash; normalizeSipDomain() strips those before
@@ -95,6 +103,19 @@ const vapiAssistantConfigSchema = z.object({
 
 const twilioPhoneConfigSchema = z.object({
   messagingServiceSid: twilioMessagingServiceSid.optional(),
+}).strict();
+
+// Bolna's phone-number ProviderResource config is written directly by
+// platformBolnaProvisioningCli.ts (not through the tenant-facing integrations
+// API — Bolna, like production Vapi, is platform-CLI-provisioned only for
+// now). This schema exists so the generic health-check and
+// publicResourceConfig() read-paths in integrations.routes.ts can display
+// Bolna resources cleanly instead of flagging them as invalid, the same way
+// every other provider's config is validated there.
+const bolnaPhoneConfigSchema = z.object({
+  agentId: z.string().trim().min(1).max(200).optional(),
+  bolnaPhoneNumberId: z.string().trim().min(1).max(200).optional(),
+  boundAt: z.string().datetime({ offset: true }).optional(),
 }).strict();
 
 const twilioMessagingServiceConfigSchema = z.object({
@@ -214,11 +235,20 @@ export function providerCredentialPurpose(
 }
 
 export function parseExternalAccountId(provider: SupportedProvider, value: unknown): string {
-  return (provider === 'vapi' ? vapiIdentifier : twilioAccountSid).parse(value);
+  // Twilio account SIDs have a strict, distinctive format; everything else
+  // (Vapi's own identifiers, and Bolna's "platform:<organizationId>"
+  // convention used by platformBolnaProvisioningCli.ts, mirroring Vapi's own
+  // platformVapiExternalAccountId()) is validated as a loose identifier.
+  if (provider === 'twilio') return twilioAccountSid.parse(value);
+  return vapiIdentifier.parse(value);
 }
 
 export function parseAccountConfig(provider: SupportedProvider, value: unknown): Record<string, unknown> {
-  const schema = provider === 'vapi' ? vapiAccountConfigSchema : twilioAccountConfigSchema;
+  const schema = provider === 'vapi'
+    ? vapiAccountConfigSchema
+    : provider === 'bolna'
+      ? bolnaAccountConfigSchema
+      : twilioAccountConfigSchema;
   return schema.parse(value ?? {});
 }
 
@@ -271,6 +301,13 @@ export function parseResourceExternalId(
   if (provider === 'twilio' && resourceType === 'messaging_service') {
     return twilioMessagingServiceSid.parse(value);
   }
+  if (provider === 'bolna' && resourceType === 'phone_number') {
+    // Keyed by E.164, like Twilio's phone_number resources above — this is
+    // also exactly the shape of Bolna's auto-injected `to_number` tool
+    // parameter, so tenant resolution is a direct lookup with no extra
+    // Bolna-internal-ID mapping table needed.
+    return e164Phone.parse(value);
+  }
   throw new Error('Unsupported provider resource type');
 }
 
@@ -285,6 +322,8 @@ export function parseResourceConfig(
   else if (provider === 'twilio' && resourceType === 'phone_number') schema = twilioPhoneConfigSchema;
   else if (provider === 'twilio' && resourceType === 'messaging_service') {
     schema = twilioMessagingServiceConfigSchema;
+  } else if (provider === 'bolna' && resourceType === 'phone_number') {
+    schema = bolnaPhoneConfigSchema;
   } else {
     throw new Error('Unsupported provider resource type');
   }
@@ -399,10 +438,17 @@ export function providerAccountReadinessIssues(
   ) {
     issues.push('Platform-managed account attribution is invalid');
   }
-  try {
-    decryptProviderCredentials(account);
-  } catch {
-    issues.push('Credentials are missing or invalid');
+  // Bolna accounts never store credentials in this table at all — the real
+  // PLATFORM_BOLNA_API_KEY is read directly from the environment by
+  // bolnaClient.ts, exactly like Vapi's platform mode but without ever
+  // round-tripping through this generic credential-vault abstraction — so
+  // there is nothing meaningful for decryptProviderCredentials() to check.
+  if (provider !== 'bolna') {
+    try {
+      decryptProviderCredentials(account);
+    } catch {
+      issues.push('Credentials are missing or invalid');
+    }
   }
   return issues;
 }

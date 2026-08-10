@@ -263,3 +263,33 @@ export function requireMachineAuth(req: Request, res: Response, next: NextFuncti
   req.machineAuth = { provider: 'vapi', method: 'bearer' };
   next();
 }
+
+/**
+ * Bolna's custom-function tools authenticate via a static `api_token` Bearer
+ * value configured once per tool at agent-provisioning time (see
+ * bolnaAgentBlueprint.ts) — there is no documented HMAC-signature scheme for
+ * these calls the way Vapi's Custom Credential supports, so this mirrors only
+ * the bearer-secret branch of requireMachineAuth above, kept fully separate
+ * so nothing about Vapi's own auth path is touched.
+ */
+export function requireBolnaMachineAuth(req: Request, res: Response, next: NextFunction) {
+  const expected = process.env.BOLNA_WEBHOOK_SECRET;
+  if (!expected) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(500).json({ error: 'Webhook authentication is not configured' });
+    }
+    console.warn('BOLNA_WEBHOOK_SECRET not set; allowing webhook in non-production mode.');
+    req.machineAuth = { provider: 'bolna', method: 'development' };
+    return next();
+  }
+
+  const authHeader = req.header('authorization');
+  const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : undefined;
+
+  if (!bearer || !safeTokenEqual(hashToken(bearer), hashToken(expected))) {
+    return res.status(401).json({ error: 'Invalid webhook authentication' });
+  }
+
+  req.machineAuth = { provider: 'bolna', method: 'bearer' };
+  next();
+}

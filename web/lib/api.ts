@@ -404,7 +404,13 @@ export interface RazorpayCancellationResult {
 
 // ── Tenant provider integrations ────────────────────────────────────────────
 
-export type IntegrationProvider = 'vapi' | 'twilio';
+// 'bolna' accounts/resources are currently provisioned platform-side only
+// (via the bolna:bind-platform / bolna:provision-agent CLIs, mirroring
+// production Vapi's platform-managed flow) — they still show up in
+// GET /dashboard/integrations once provisioned, so the type and display
+// logic below need to recognize them even though the tenant self-serve
+// "Add provider account" form does not yet offer creating one.
+export type IntegrationProvider = 'vapi' | 'twilio' | 'bolna';
 export type IntegrationStatus = 'provisioning' | 'active' | 'inactive';
 
 export interface ProviderResourceView {

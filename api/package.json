@@ -10,6 +10,8 @@
     "test": "npm run build && node --test --require ts-node/register tests/*.test.ts",
     "billing:sync-prices": "node dist/billing/syncPriceVersionsCli.js",
     "vapi:bind-platform": "node dist/services/platformVapiProvisioningCli.js",
+    "bolna:bind-platform": "node dist/services/platformBolnaProvisioningCli.js",
+    "bolna:provision-agent": "node dist/services/bolnaAgentProvisioningCli.js",
     "security:encrypt-legacy-secrets": "node dist/ops/encryptLegacySecretsCli.js",
     "dev:worker": "nodemon --watch src --ext ts --exec ts-node src/worker.ts",
     "auth:bootstrap": "ts-node prisma/bootstrapOwner.ts"
