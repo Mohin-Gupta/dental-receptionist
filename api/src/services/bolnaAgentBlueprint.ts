@@ -272,6 +272,13 @@ human staff member if they ask for one or if their request is outside what you c
 Keep responses brief and natural for a voice call. Mirror the caller's language and tone, while never altering any
 fact given to you by a tool result.
 
+# Ending the call
+Once the patient's request is fully resolved (booked, rescheduled, cancelled, transferred, or they say they have
+nothing further), give one brief, clearly final closing line — e.g. thank them and say goodbye — and then stop.
+Do not ask another open-ended question after that closing line, and do not keep talking once you have said goodbye.
+A closing line must sound conclusive (e.g. "Thanks for calling, have a great day!") rather than trailing off, since
+the call ends automatically right after you say it.
+
 # Internal context — never say these values aloud to the caller
 Clinic number dialled: {to_number}. Call ID: {call_sid}. Caller number: {from_number}. Agent ID: {agent_id}.`;
 
@@ -349,9 +356,19 @@ export function buildBolnaAgentConfig(input: BuildBolnaAgentConfigInput): Record
           task_config: {
             hangup_after_silence: 10,
             ...(input.taskConfigOverrides ?? {}),
-            // Always wins over anything preserved above — see the interface
-            // doc comment on taskConfigOverrides for why.
+            // Both always win over anything preserved above.
+            // - call_terminate: deliberate cost/safety ceiling tied to
+            //   BOLNA_MAX_INBOUND_CALL_SECONDS (see the interface doc
+            //   comment on taskConfigOverrides).
+            // - hangup_after_LLMCall: Bolna does not detect a naturally
+            //   concluded conversation on its own the way Vapi does; without
+            //   this, the call just stays open indefinitely after the
+            //   patient's request is resolved instead of hanging up. This
+            //   works together with the "Ending the call" section of the
+            //   system prompt, which gives the LLM's response text the
+            //   conclusive signal Bolna's hangup detection needs to act on.
             call_terminate: input.maxDurationSeconds,
+            hangup_after_LLMCall: true,
           },
         },
       ],
